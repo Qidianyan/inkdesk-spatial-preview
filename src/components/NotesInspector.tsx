@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   LAYOUT_PRESETS,
   type ArtifactPart,
@@ -77,6 +78,15 @@ export const NotesInspector: React.FC<NotesInspectorProps> = ({
   useEffect(() => {
     setPinError(null);
   }, [artifact.id]);
+
+  useEffect(() => {
+    if (!showReportModal) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowReportModal(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showReportModal]);
 
   const artifactNotes = notes.filter((n) => n.artifactId === artifact.id);
 
@@ -357,27 +367,50 @@ export const NotesInspector: React.FC<NotesInspectorProps> = ({
         </button>
       </div>
 
-      {showReportModal && (
-        <div className="report-drawer-backdrop" role="dialog" aria-modal="true" aria-label="Markdown 研学报告预览">
-          <div className="report-drawer">
-            <div className="report-drawer-head">
-              <strong>研学报告预览（Markdown）</strong>
-              <div className="report-drawer-actions">
-                <button type="button" className="action-btn primary" onClick={handleDownloadMarkdown}>
-                  <Download size={13} />
-                  <span>下载 .md</span>
-                </button>
-                <button type="button" className="mini-icon-btn" onClick={() => setShowReportModal(false)} aria-label="关闭">
-                  <X size={16} />
-                </button>
+      {showReportModal &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="report-drawer-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Markdown 研学报告预览"
+            data-testid="report-modal-backdrop"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setShowReportModal(false);
+            }}
+          >
+            <div className="report-drawer" data-testid="report-modal-dialog">
+              <div className="report-drawer-head">
+                <strong>研学报告预览（Markdown）</strong>
+                <div className="report-drawer-actions">
+                  <button
+                    type="button"
+                    data-testid="download-report-btn"
+                    className="action-btn primary"
+                    onClick={handleDownloadMarkdown}
+                  >
+                    <Download size={13} />
+                    <span>下载 .md</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="close-report-btn"
+                    className="mini-icon-btn"
+                    onClick={() => setShowReportModal(false)}
+                    aria-label="关闭"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
               </div>
+              <pre className="report-preview-code" data-testid="markdown-report-preview">
+                {markdownReport}
+              </pre>
             </div>
-            <pre className="report-preview-code" data-testid="markdown-report-preview">
-              {markdownReport}
-            </pre>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.querySelector('.inkdesk-viewport') ?? document.body
+        )}
     </aside>
   );
 };

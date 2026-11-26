@@ -4,7 +4,7 @@
 
 ## 核心资产与机械质量门禁
 
-- **共享二进制 `.glb` 3D 资产**（`public/models/`，与 Android `app/src/main/assets/models/` 字节一致）：`yongle_dougong.glb`（658 KB）、`ming_armillary.glb`（2.39 MB）、`xuande_censer.glb`（911 KB）、`origami_pagoda.glb`（371 KB），由 `scripts/build_glb_assets.mjs` 通过 Three.js `GLTFExporter` 导出。
+- **共享二进制 `.glb` 3D 资产**（`public/models/`，与 Android `app/src/main/assets/models/` 字节一致）：`yongle_dougong.glb`（658 KB）、`ming_armillary.glb`（2.33 MB）、`xuande_censer.glb`（911 KB）、`origami_pagoda.glb`（371 KB），由 `scripts/build_glb_assets.mjs` 通过 Three.js `GLTFExporter` 导出。
 - **3 张 1024×1024 无缝 PBR 贴图**（`public/textures/`）：`hinoki_wood.jpg`（京都桧木）、`patina_bronze.jpg`（明代铸铜包浆）、`alabaster_stone.jpg`（汉白玉石材），绑定 `map + bumpMap + roughnessMap`。
 - **机械质量门禁全绿**：`tsc --noEmit` 0 错、**Vitest 33/33 单测全绿**（榫卯磁吸 14 + 3D 锚点与影棚光 13 + 空间布局/拆解/HRTF/报告 6）、Vite 生产构建、**8 视口 `sloplint --render` `0 FAIL / 0 WARN`**、Metal 无头 Playwright E2E 零控制台报错。
 

@@ -400,7 +400,6 @@ input[type='range'].ink-range:focus-visible {
 .window-slot {
   min-height: 0;
   height: 100%;
-  transform-style: preserve-3d;
   transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.32s ease;
 }
 
@@ -1743,7 +1742,7 @@ input[type='range'].ink-range:focus-visible {
 .report-drawer-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 80;
   background: var(--modal-scrim);
   display: grid;
   place-items: center;
@@ -1751,7 +1750,7 @@ input[type='range'].ink-range:focus-visible {
 }
 
 .report-drawer {
-  width: min(680px, 92vw);
+  width: min(720px, 92vw);
   max-height: 82vh;
   display: flex;
   flex-direction: column;
@@ -1759,14 +1758,15 @@ input[type='range'].ink-range:focus-visible {
   padding: 20px;
   border-radius: 24px;
   background: var(--elevated-bg);
-  border: 0;
-  box-shadow: var(--shadow-spatial);
+  border: 1px solid var(--border-gold);
 }
 
 .report-drawer-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  color: var(--text-primary);
 }
 
 .report-drawer-actions {
@@ -1784,6 +1784,7 @@ input[type='range'].ink-range:focus-visible {
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
+  word-break: break-word;
   overflow-y: auto;
 }
 
