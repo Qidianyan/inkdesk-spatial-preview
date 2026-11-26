@@ -26,6 +26,23 @@ import {
   type CutawayPlaneState,
   type MortiseAssemblyState
 } from './assembly/mortiseAssembly';
+import {
+  addCustomCalloutAnchor,
+  createSpatialAnchorState,
+  deleteCustomCalloutAnchor,
+  getAnchorsForArtifact,
+  loadPersistedCustomAnchors,
+  savePersistedCustomAnchors,
+  selectCalloutAnchor,
+  setShowPinsIn3D,
+  setStudioLightingPreset,
+  switchAnchorArtifact,
+  syncSelectedAnchorToPart,
+  type CalloutPinTone,
+  type CameraFocusTarget,
+  type SpatialAnchorState,
+  type StudioLightingPresetId
+} from './spatial/calloutAnchors';
 import { measureDistanceMm } from './engine/explodedModel';
 import { computeSpatialLayout } from './engine/spatialLayout';
 import { generateStudyReportMarkdown } from './engine/studyReport';
@@ -41,6 +58,11 @@ export interface SnapPulseEvent {
   isComplete: boolean;
 }
 
+export interface CameraFocusEvent {
+  nonce: number;
+  target: CameraFocusTarget;
+}
+
 export const App: React.FC = () => {
   const [artifactId, setArtifactId] = useState<string>('dougong_bell');
   const [selectedPartId, setSelectedPartId] = useState<string>('ang_lever');
@@ -53,6 +75,14 @@ export const App: React.FC = () => {
   const assemblyStateRef = useRef<MortiseAssemblyState>(assemblyState);
   assemblyStateRef.current = assemblyState;
   const cutaway = assemblyState.cutaway;
+
+  const [anchorState, setAnchorState] = useState<SpatialAnchorState>(() =>
+    createSpatialAnchorState('dougong_bell', loadPersistedCustomAnchors(), 'KYOTO_MORNING')
+  );
+  const anchorStateRef = useRef<SpatialAnchorState>(anchorState);
+  anchorStateRef.current = anchorState;
+
+  const [cameraFocusGoal, setCameraFocusGoal] = useState<CameraFocusEvent | null>(null);
   const [snapPulse, setSnapPulse] = useState<SnapPulseEvent | null>(null);
   const [sfxMuted, setSfxMuted] = useState<boolean>(false);
   const [autoOrbit, setAutoOrbit] = useState<boolean>(true);
@@ -111,6 +141,10 @@ export const App: React.FC = () => {
 
   const artifact = useMemo(() => findArtifact(artifactId), [artifactId]);
   const selectedPart = useMemo(() => findPart(artifact.id, selectedPartId), [artifact.id, selectedPartId]);
+  const artifactAnchors = useMemo(
+    () => getAnchorsForArtifact(anchorState, artifact.id),
+    [anchorState, artifact.id]
+  );
   const panelPoses = useMemo(
     () => computeSpatialLayout(layoutPreset, { x: 0, y: 0, z: 0 }, headYawDegrees),
     [layoutPreset, headYawDegrees]
@@ -131,6 +165,8 @@ export const App: React.FC = () => {
         crossSectionEnabled: cutaway.enabled,
         layoutPreset,
         ambientTheme,
+        lightingPreset: anchorState.lightingPreset,
+        calloutAnchors: artifactAnchors,
         soundAnchors,
         focusTimer,
         notes
@@ -143,6 +179,8 @@ export const App: React.FC = () => {
       cutaway.enabled,
       layoutPreset,
       ambientTheme,
+      anchorState.lightingPreset,
+      artifactAnchors,
       soundAnchors,
       focusTimer,
       notes
@@ -154,13 +192,24 @@ export const App: React.FC = () => {
     setAssemblyState(next);
   };
 
+  const commitAnchorState = (next: SpatialAnchorState, persistCustom = false) => {
+    anchorStateRef.current = next;
+    setAnchorState(next);
+    if (persistCustom) {
+      savePersistedCustomAnchors(next);
+    }
+  };
+
   const handleSelectArtifact = (nextId: string) => {
     const next = findArtifact(nextId);
     const nextCutaway = sanitizeCutawayState({ enabled: false }, assemblyStateRef.current.cutaway);
     const nextAssembly = createMortiseAssemblyState(next, { cutaway: nextCutaway });
+    const nextAnchors = switchAnchorArtifact(anchorStateRef.current, next.id);
     setArtifactId(next.id);
     commitAssemblyState(nextAssembly);
+    commitAnchorState(nextAnchors);
     setSnapPulse(null);
+    setCameraFocusGoal(null);
     const firstActive = getAssemblyProgress(nextAssembly).activePartId ?? next.parts[0].id;
     setSelectedPartId(stageMode === 'ASSEMBLY' ? firstActive : next.parts[0].id);
     setComparePartId(next.parts[1]?.id ?? null);
@@ -171,19 +220,76 @@ export const App: React.FC = () => {
     setStageMode(nextMode);
     if (nextMode === 'ASSEMBLY') {
       setAutoOrbit(false);
+      setCameraFocusGoal(null);
       const activeId = getAssemblyProgress(assemblyStateRef.current).activePartId;
       if (activeId) {
         setSelectedPartId(activeId);
+        commitAnchorState(syncSelectedAnchorToPart(anchorStateRef.current, artifact.id, activeId));
       }
     }
   };
 
   const handleSelectPart = (partId: string) => {
     setSelectedPartId(partId);
+    commitAnchorState(syncSelectedAnchorToPart(anchorStateRef.current, artifact.id, partId));
     if (comparePartId === partId) {
       const other = artifact.parts.find((p) => p.id !== partId);
       setComparePartId(other?.id ?? null);
     }
+  };
+
+  const handleSelectAnchor = (anchorId: string) => {
+    const res = selectCalloutAnchor(anchorStateRef.current, anchorId);
+    if (!res.found || !res.anchor || !res.partId) return;
+    commitAnchorState(res.state);
+    setSelectedPartId(res.partId);
+    if (comparePartId === res.partId) {
+      const other = artifact.parts.find((p) => p.id !== res.partId);
+      setComparePartId(other?.id ?? null);
+    }
+    setAutoOrbit(false);
+    if (res.cameraFocus) {
+      setCameraFocusGoal({
+        nonce: Date.now() + Math.random(),
+        target: res.cameraFocus
+      });
+    }
+  };
+
+  const handleAddCustomAnchor = (titleZh: string, craftDetailZh: string, tone: CalloutPinTone = 'CINNABAR') => {
+    const res = addCustomCalloutAnchor(anchorStateRef.current, {
+      artifactId: artifact.id,
+      partId: selectedPart.id,
+      titleZh,
+      craftDetailZh,
+      tone
+    });
+    if (!res.ok || !res.anchor) {
+      return { ok: false, errorZh: res.errorZh ?? '新增空间批注钉失败。' };
+    }
+    commitAnchorState(res.state, true);
+    setAutoOrbit(false);
+    setCameraFocusGoal({
+      nonce: Date.now() + Math.random(),
+      target: res.anchor.cameraFocus
+    });
+    audioRef.current?.playHinokiSnapSound(0.65);
+    return { ok: true, errorZh: null };
+  };
+
+  const handleDeleteCustomAnchor = (anchorId: string) => {
+    const res = deleteCustomCalloutAnchor(anchorStateRef.current, anchorId);
+    if (res.ok) {
+      commitAnchorState(res.state, true);
+    }
+  };
+
+  const handleSetLightingPreset = (preset: StudioLightingPresetId) => {
+    commitAnchorState(setStudioLightingPreset(anchorStateRef.current, preset));
+  };
+
+  const handleToggleShowPins = () => {
+    commitAnchorState(setShowPinsIn3D(anchorStateRef.current, !anchorStateRef.current.showPinsIn3D));
   };
 
   const handleUpdateCutaway = (patch: Partial<CutawayPlaneState>) => {
@@ -225,6 +331,7 @@ export const App: React.FC = () => {
       }
       const nextActive = prog.activePartId ?? partId;
       setSelectedPartId(nextActive);
+      commitAnchorState(syncSelectedAnchorToPart(anchorStateRef.current, artifact.id, nextActive));
     } else if (reason === 'OUT_OF_ORDER') {
       audioRef.current?.playSnapRejectThud();
     }
@@ -294,6 +401,7 @@ export const App: React.FC = () => {
     setLayoutPreset('SURROUND_ARC');
     setHeadYawDegrees(0);
     setExplodeProgress(0.26);
+    setCameraFocusGoal(null);
     handleUpdateCutaway({ enabled: false, axis: 'Y', offsetMeters: 0.22 });
   };
 
@@ -404,6 +512,11 @@ export const App: React.FC = () => {
             explodeProgress={explodeProgress}
             cutaway={cutaway}
             assemblyState={assemblyState}
+            calloutAnchors={artifactAnchors}
+            selectedAnchorId={anchorState.selectedAnchorId}
+            showPinsIn3D={anchorState.showPinsIn3D}
+            lightingPreset={anchorState.lightingPreset}
+            cameraFocusGoal={cameraFocusGoal}
             snapPulse={snapPulse}
             sfxMuted={sfxMuted}
             ambientTheme={ambientTheme}
@@ -411,6 +524,9 @@ export const App: React.FC = () => {
             caliperDistanceMm={caliperDistanceMm}
             onSelectArtifact={handleSelectArtifact}
             onSelectPart={handleSelectPart}
+            onSelectAnchor={handleSelectAnchor}
+            onSetLightingPreset={handleSetLightingPreset}
+            onToggleShowPins={handleToggleShowPins}
             onSetStageMode={handleSetStageMode}
             onChangeExplode={setExplodeProgress}
             onUpdateCutaway={handleUpdateCutaway}
@@ -432,9 +548,14 @@ export const App: React.FC = () => {
               comparePartId={comparePartId}
               caliperDistanceMm={caliperDistanceMm}
               layoutPreset={layoutPreset}
+              calloutAnchors={artifactAnchors}
+              selectedAnchorId={anchorState.selectedAnchorId}
               notes={notes}
               markdownReport={markdownReport}
               onSelectPart={handleSelectPart}
+              onSelectAnchor={handleSelectAnchor}
+              onAddCustomAnchor={handleAddCustomAnchor}
+              onDeleteCustomAnchor={handleDeleteCustomAnchor}
               onChangeComparePart={setComparePartId}
               onAddNote={handleAddNote}
               onTogglePin={(id) =>

@@ -18,6 +18,14 @@ import {
   type CutawayPlaneState,
   type MortiseAssemblyState
 } from '../assembly/mortiseAssembly';
+import {
+  STUDIO_LIGHTING_ORDER,
+  STUDIO_LIGHTING_PRESETS,
+  computeDirectionalLightVector,
+  resolveAnchorWorldPosition,
+  type SpatialCalloutAnchor,
+  type StudioLightingPresetId
+} from '../spatial/calloutAnchors';
 import { computePartPosition } from '../engine/explodedModel';
 import {
   loadArtifactGlb,
@@ -25,16 +33,21 @@ import {
   type LoadedArtifactRig,
   type SharedPbrTextures
 } from '../three/loadArtifactGlb';
-import type { SnapPulseEvent } from '../App';
+import type { CameraFocusEvent, SnapPulseEvent } from '../App';
 import {
   CheckCircle2,
   Compass,
+  Eye,
+  EyeOff,
+  Flame,
   Layers,
   Magnet,
+  MapPin,
   RotateCcw,
   RotateCw,
   Scissors,
   Sparkles,
+  Sun,
   Volume2,
   VolumeX
 } from 'lucide-react';
@@ -49,6 +62,11 @@ interface SpatialStage3DProps {
   explodeProgress: number;
   cutaway: CutawayPlaneState;
   assemblyState: MortiseAssemblyState;
+  calloutAnchors: SpatialCalloutAnchor[];
+  selectedAnchorId: string | null;
+  showPinsIn3D: boolean;
+  lightingPreset: StudioLightingPresetId;
+  cameraFocusGoal: CameraFocusEvent | null;
   snapPulse: SnapPulseEvent | null;
   sfxMuted: boolean;
   ambientTheme: AmbientLightingTheme;
@@ -56,6 +74,9 @@ interface SpatialStage3DProps {
   caliperDistanceMm: number;
   onSelectArtifact: (id: string) => void;
   onSelectPart: (partId: string) => void;
+  onSelectAnchor: (anchorId: string) => void;
+  onSetLightingPreset: (preset: StudioLightingPresetId) => void;
+  onToggleShowPins: () => void;
   onSetStageMode: (mode: StageInteractionMode) => void;
   onChangeExplode: (progress: number) => void;
   onUpdateCutaway: (patch: Partial<CutawayPlaneState>) => void;
@@ -68,12 +89,20 @@ interface SpatialStage3DProps {
   onToggleAutoOrbit: () => void;
 }
 
+interface PinVisualEntry {
+  group: THREE.Group;
+  orb: THREE.Mesh;
+  ring: THREE.Mesh;
+  stem: THREE.Line;
+  partId: string;
+}
+
 const SMOKE_COUNT = 34;
 
-const CUTAWAY_AXES: { axis: CutawayAxis; shortZh: string; labelZh: string }[] = [
-  { axis: 'Y', shortZh: '水平 Y', labelZh: '水平剖面 Y' },
-  { axis: 'X', shortZh: '纵切 X', labelZh: '纵切剖面 X' },
-  { axis: 'Z', shortZh: '立面 Z', labelZh: '立面剖面 Z' }
+const CUTAWAY_AXES: { axis: CutawayAxis; shortZh: string }[] = [
+  { axis: 'Y', shortZh: '水平 Y' },
+  { axis: 'X', shortZh: '纵切 X' },
+  { axis: 'Z', shortZh: '立面 Z' }
 ];
 
 export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
@@ -84,6 +113,11 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
   explodeProgress,
   cutaway,
   assemblyState,
+  calloutAnchors,
+  selectedAnchorId,
+  showPinsIn3D,
+  lightingPreset,
+  cameraFocusGoal,
   snapPulse,
   sfxMuted,
   ambientTheme,
@@ -91,6 +125,9 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
   caliperDistanceMm,
   onSelectArtifact,
   onSelectPart,
+  onSelectAnchor,
+  onSetLightingPreset,
+  onToggleShowPins,
   onSetStageMode,
   onChangeExplode,
   onUpdateCutaway,
@@ -116,6 +153,9 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
   const guideInnerRingRef = useRef<THREE.Mesh | null>(null);
   const guideBeamRef = useRef<THREE.Line | null>(null);
   const snapWaveRef = useRef<THREE.Mesh | null>(null);
+  const pinsRootRef = useRef<THREE.Group | null>(null);
+  const pinVisualsRef = useRef<Map<string, PinVisualEntry>>(new Map());
+  const cameraGoalRef = useRef<{ nonce: number; yaw: number; pitch: number; zoom: number } | null>(null);
   const snapAnimRef = useRef<{ startSec: number; nonce: number; isComplete: boolean; partId: string; pos: Vec3 }>({
     startSec: -10,
     nonce: 0,
@@ -160,6 +200,10 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     if (!activeStep) return 100;
     return Math.round(computePartApproachRatio(assemblyState, activeStep.partId) * 100);
   }, [assemblyState, activeStep]);
+  const selectedAnchor = useMemo(
+    () => calloutAnchors.find((a) => a.id === selectedAnchorId) ?? null,
+    [calloutAnchors, selectedAnchorId]
+  );
 
   const propsRef = useRef({
     artifact,
@@ -169,10 +213,16 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     explodeProgress,
     cutaway,
     assemblyState,
+    calloutAnchors,
+    selectedAnchorId,
+    showPinsIn3D,
+    lightingPreset,
+    cameraFocusGoal,
     snapPulse,
     ambientTheme,
     autoOrbit,
     onSelectPart,
+    onSelectAnchor,
     onMoveAssemblyPart,
     onAttemptSnapPart
   });
@@ -184,15 +234,21 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     explodeProgress,
     cutaway,
     assemblyState,
+    calloutAnchors,
+    selectedAnchorId,
+    showPinsIn3D,
+    lightingPreset,
+    cameraFocusGoal,
     snapPulse,
     ambientTheme,
     autoOrbit,
     onSelectPart,
+    onSelectAnchor,
     onMoveAssemblyPart,
     onAttemptSnapPart
   };
 
-  // Initialize Three.js PBR Stage + RoomEnvironment IBL + Magnetic Guide Ring + Cutaway Slicer
+  // Initialize Three.js PBR Stage + RoomEnvironment IBL + 3-Preset Studio Lighting + Spatial Callout Pins
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
@@ -223,7 +279,6 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // Photorealistic metallic & wood IBL via Three.js RoomEnvironment PMREM
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     const envRT = pmremGenerator.fromScene(new RoomEnvironment(), 0.04);
     scene.environment = envRT.texture;
@@ -232,38 +287,39 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     const sharedTextures = loadSharedPbrTextures(renderer.capabilities.getMaxAnisotropy());
     texturesRef.current = sharedTextures;
 
-    // Architectural studio lighting (warm stone / hinoki / brushed bronze — strictly zero blue/cyan/purple)
-    const hemi = new THREE.HemisphereLight(0xfaf8f4, 0x5c554c, 0.85);
+    // 3-Preset Warm Architectural Studio Light Rig (Strictly zero blue/cyan/teal/purple)
+    const hemi = new THREE.HemisphereLight(0xfaf7f1, 0x625a4e, 0.94);
     scene.add(hemi);
 
-    const keyLight = new THREE.DirectionalLight(0xfff7ec, 1.9);
-    keyLight.position.set(3.2, 4.8, 3.6);
+    const keyLight = new THREE.DirectionalLight(0xfff6e8, 1.95);
+    const initDir = computeDirectionalLightVector('KYOTO_MORNING', 5.8);
+    keyLight.position.set(initDir.x, initDir.y, initDir.z);
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.set(1024, 1024);
     keyLight.shadow.bias = -0.0004;
     keyLight.shadow.camera.near = 1.0;
-    keyLight.shadow.camera.far = 14.0;
-    keyLight.shadow.camera.left = -2.4;
-    keyLight.shadow.camera.right = 2.4;
-    keyLight.shadow.camera.top = 2.4;
-    keyLight.shadow.camera.bottom = -2.4;
+    keyLight.shadow.camera.far = 16.0;
+    keyLight.shadow.camera.left = -2.6;
+    keyLight.shadow.camera.right = 2.6;
+    keyLight.shadow.camera.top = 2.6;
+    keyLight.shadow.camera.bottom = -2.6;
     scene.add(keyLight);
 
-    const rimLight = new THREE.DirectionalLight(0xe4b876, 1.05);
+    const rimLight = new THREE.DirectionalLight(0xe6bd80, 1.05);
     rimLight.position.set(-3.4, 2.2, -2.8);
     scene.add(rimLight);
 
-    const emberFill = new THREE.PointLight(0xd97d42, 0.5, 9);
+    const emberFill = new THREE.PointLight(0xd98548, 0.45, 9.5);
     emberFill.position.set(-1.4, -0.7, 2.2);
     scene.add(emberFill);
 
-    // Subtle Kyoto gallery stone pedestal & soft contact shadow receiver
+    // Pedestal & soft shadow receiver
     const pedestalGroup = new THREE.Group();
     pedestalGroup.position.set(0, -1.32, 0);
 
     const shadowPlane = new THREE.Mesh(
       new THREE.CircleGeometry(1.75, 64),
-      new THREE.ShadowMaterial({ opacity: 0.22 })
+      new THREE.ShadowMaterial({ opacity: 0.24 })
     );
     shadowPlane.rotation.x = -Math.PI / 2;
     shadowPlane.receiveShadow = true;
@@ -274,7 +330,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
       new THREE.MeshBasicMaterial({
         color: 0xc98a3a,
         transparent: true,
-        opacity: 0.42,
+        opacity: 0.44,
         side: THREE.DoubleSide
       })
     );
@@ -296,7 +352,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     pedestalGroup.add(innerTitaniumRing);
     scene.add(pedestalGroup);
 
-    // Real-Time Architectural Cutaway Plane Ring + Translucent Warm Amber-Cinnabar Disc
+    // Real-Time Multi-Axis Architectural Cutaway Ring + Disc
     const sectionGroup = new THREE.Group();
     const sectionDisc = new THREE.Mesh(
       new THREE.CircleGeometry(1.26, 72),
@@ -323,7 +379,13 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     scene.add(sectionGroup);
     sectionGroupRef.current = sectionGroup;
 
-    // Copper-Gold Magnetic Snap Target Guide Ring (Zero blue/cyan/purple)
+    // 3D Spatial Callout Pins Root Container
+    const pinsRoot = new THREE.Group();
+    pinsRoot.name = 'spatial_callout_pins_root';
+    scene.add(pinsRoot);
+    pinsRootRef.current = pinsRoot;
+
+    // Copper-Gold Magnetic Snap Target Guide Ring
     const guideGroup = new THREE.Group();
     const guideOuter = new THREE.Mesh(
       new THREE.TorusGeometry(0.52, 0.02, 16, 64),
@@ -351,7 +413,6 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     guideGroup.add(guideInner);
     guideInnerRingRef.current = guideInner;
 
-    // 4 architectural bronze-vermilion alignment ticks on the magnetic ring
     for (let i = 0; i < 4; i++) {
       const ang = (i * Math.PI) / 2;
       const tick = new THREE.Mesh(
@@ -367,7 +428,6 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     scene.add(guideGroup);
     guideGroupRef.current = guideGroup;
 
-    // Warm bronze guide beam connecting floating active part to target socket
     const guideBeamGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(0, 0, 0),
       new THREE.Vector3(0, 0.5, 0)
@@ -382,7 +442,6 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     scene.add(guideBeam);
     guideBeamRef.current = guideBeam;
 
-    // Warm golden radial light pulse wave on mortise snap-lock & assembly completion
     const snapWave = new THREE.Mesh(
       new THREE.TorusGeometry(0.28, 0.022, 16, 64),
       new THREE.MeshBasicMaterial({
@@ -397,7 +456,6 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     scene.add(snapWave);
     snapWaveRef.current = snapWave;
 
-    // 3D Spatial Caliper measurement line
     const caliperGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(0, 0, 0),
       new THREE.Vector3(0, 0.5, 0)
@@ -408,7 +466,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     scene.add(caliperLine);
     caliperLineRef.current = caliperLine;
 
-    // Live Rising Incense Smoke Particles for Song-Ming Xuande Censer
+    // Incense smoke particle system
     const smokePositions = new Float32Array(SMOKE_COUNT * 3);
     const smokeMeta: { phase: number; radius: number; speed: number; curl: number }[] = [];
     for (let i = 0; i < SMOKE_COUNT; i++) {
@@ -435,7 +493,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     scene.add(smokePoints);
     smokePointsRef.current = smokePoints;
 
-    // Pointer interaction: 3D mortise part drag in ASSEMBLY mode + 360° orbit + raycast select
+    // Pointer interaction: 3D Pin click (priority) + 3D mortise part drag + 360° orbit
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     const hitPoint = new THREE.Vector3();
@@ -449,6 +507,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     const onPointerDown = (ev: PointerEvent) => {
       const p = propsRef.current;
       updatePointer(ev);
+      cameraGoalRef.current = null;
 
       if (p.stageMode === 'ASSEMBLY' && rigRef.current) {
         raycaster.setFromCamera(pointer, camera);
@@ -528,18 +587,32 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
       if (renderer.domElement.hasPointerCapture(ev.pointerId)) {
         renderer.domElement.releasePointerCapture(ev.pointerId);
       }
-      if (wasClick && rigRef.current) {
+      if (wasClick) {
         updatePointer(ev);
         raycaster.setFromCamera(pointer, camera);
-        const hits = raycaster.intersectObjects(rigRef.current.root.children, true);
-        const hitPart = hits.find((h) => typeof h.object.userData.partId === 'string');
-        if (hitPart) {
-          const hitId = hitPart.object.userData.partId as string;
-          p.onSelectPart(hitId);
-          if (p.stageMode === 'ASSEMBLY') {
-            const rt = p.assemblyState.parts[hitId];
-            if (rt && !rt.locked) {
-              p.onAttemptSnapPart(hitId);
+
+        // Priority 1: Direct 3D Spatial Callout Pin hit -> push camera & sync right inspector!
+        if (p.showPinsIn3D && pinsRootRef.current) {
+          const pinHits = raycaster.intersectObjects(pinsRootRef.current.children, true);
+          const hitPin = pinHits.find((h) => typeof h.object.userData.anchorId === 'string');
+          if (hitPin) {
+            p.onSelectAnchor(hitPin.object.userData.anchorId as string);
+            return;
+          }
+        }
+
+        // Priority 2: Direct GLB structural part pick
+        if (rigRef.current) {
+          const hits = raycaster.intersectObjects(rigRef.current.root.children, true);
+          const hitPart = hits.find((h) => typeof h.object.userData.partId === 'string');
+          if (hitPart) {
+            const hitId = hitPart.object.userData.partId as string;
+            p.onSelectPart(hitId);
+            if (p.stageMode === 'ASSEMBLY') {
+              const rt = p.assemblyState.parts[hitId];
+              if (rt && !rt.locked) {
+                p.onAttemptSnapPart(hitId);
+              }
             }
           }
         }
@@ -558,6 +631,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
 
     const onWheel = (ev: WheelEvent) => {
       ev.preventDefault();
+      cameraGoalRef.current = null;
       orbitRef.current.zoom = Math.max(2.4, Math.min(5.2, orbitRef.current.zoom + ev.deltaY * 0.002));
     };
 
@@ -580,6 +654,12 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
 
     let rafId = 0;
     const clock = new THREE.Clock();
+    const targetKeyPos = new THREE.Vector3();
+    const targetKeyColor = new THREE.Color();
+    const targetRimColor = new THREE.Color();
+    const targetHemiSky = new THREE.Color();
+    const targetHemiGround = new THREE.Color();
+    const targetEmberColor = new THREE.Color();
 
     const animate = () => {
       rafId = window.requestAnimationFrame(animate);
@@ -587,7 +667,34 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
       const elapsed = clock.elapsedTime;
       const p = propsRef.current;
 
-      if (p.autoOrbit && !orbitRef.current.dragging && !partDragRef.current.active) {
+      // Consume incoming camera focus target from 3D/panel anchor selection
+      if (p.cameraFocusGoal && (!cameraGoalRef.current || cameraGoalRef.current.nonce !== p.cameraFocusGoal.nonce)) {
+        cameraGoalRef.current = {
+          nonce: p.cameraFocusGoal.nonce,
+          yaw: p.cameraFocusGoal.target.yawRad,
+          pitch: p.cameraFocusGoal.target.pitchRad,
+          zoom: p.cameraFocusGoal.target.zoom
+        };
+      }
+
+      if (cameraGoalRef.current && !orbitRef.current.dragging && !partDragRef.current.active) {
+        const g = cameraGoalRef.current;
+        const ease = Math.min(1, dt * 6.5);
+        const yawDelta = Math.atan2(
+          Math.sin(g.yaw - orbitRef.current.yaw),
+          Math.cos(g.yaw - orbitRef.current.yaw)
+        );
+        orbitRef.current.yaw += yawDelta * ease;
+        orbitRef.current.pitch += (g.pitch - orbitRef.current.pitch) * ease;
+        orbitRef.current.zoom += (g.zoom - orbitRef.current.zoom) * ease;
+        if (
+          Math.abs(yawDelta) < 0.008 &&
+          Math.abs(g.pitch - orbitRef.current.pitch) < 0.008 &&
+          Math.abs(g.zoom - orbitRef.current.zoom) < 0.012
+        ) {
+          cameraGoalRef.current = null;
+        }
+      } else if (p.autoOrbit && !orbitRef.current.dragging && !partDragRef.current.active) {
         orbitRef.current.yaw += dt * 0.28;
       }
 
@@ -602,31 +709,33 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
       );
       camera.lookAt(0, p.stageMode === 'ASSEMBLY' ? 0.14 : -0.05, 0);
 
-      // Ambient studio light temperature tuning
-      if (p.ambientTheme === 'CANDLELIGHT') {
-        hemi.intensity = 0.72;
-        keyLight.color.setHex(0xffd7a3);
-        keyLight.intensity = 2.05;
-        rimLight.intensity = 1.4;
-        emberFill.intensity = 1.15;
-        renderer.toneMappingExposure = 1.12;
-      } else if (p.ambientTheme === 'AFTERNOON') {
-        hemi.intensity = 0.88;
-        keyLight.color.setHex(0xffe9c7);
-        keyLight.intensity = 1.98;
-        rimLight.intensity = 1.1;
-        emberFill.intensity = 0.62;
-        renderer.toneMappingExposure = 1.07;
-      } else {
-        hemi.intensity = 0.96;
-        keyLight.color.setHex(0xfbf9f5);
-        keyLight.intensity = 1.85;
-        rimLight.intensity = 0.95;
-        emberFill.intensity = 0.4;
-        renderer.toneMappingExposure = 1.05;
-      }
+      // Live 3-Preset Architectural Museum Studio Directional Lighting Rig
+      const studioSpec = STUDIO_LIGHTING_PRESETS[p.lightingPreset] ?? STUDIO_LIGHTING_PRESETS.KYOTO_MORNING;
+      const lightDir = computeDirectionalLightVector(p.lightingPreset, 5.8);
+      const lightLerp = Math.min(1, dt * 7.5);
+      targetKeyPos.set(lightDir.x, lightDir.y, lightDir.z);
+      keyLight.position.lerp(targetKeyPos, lightLerp);
 
-      // Real-Time Multi-Axis Architectural Cutaway Plane
+      // Gentle candle flicker in WARM_LANTERN studio preset
+      const flicker = p.lightingPreset === 'WARM_LANTERN' ? 1 + 0.045 * Math.sin(elapsed * 7.2) : 1;
+      targetKeyColor.setHex(studioSpec.keyColorHex);
+      targetRimColor.setHex(studioSpec.rimColorHex);
+      targetHemiSky.setHex(studioSpec.hemiSkyHex);
+      targetHemiGround.setHex(studioSpec.hemiGroundHex);
+      targetEmberColor.setHex(studioSpec.emberColorHex);
+
+      keyLight.color.lerp(targetKeyColor, lightLerp);
+      keyLight.intensity += (studioSpec.keyIntensity * flicker - keyLight.intensity) * lightLerp;
+      rimLight.color.lerp(targetRimColor, lightLerp);
+      rimLight.intensity += (studioSpec.rimIntensity - rimLight.intensity) * lightLerp;
+      hemi.color.lerp(targetHemiSky, lightLerp);
+      hemi.groundColor.lerp(targetHemiGround, lightLerp);
+      hemi.intensity += (studioSpec.hemiIntensity - hemi.intensity) * lightLerp;
+      emberFill.color.lerp(targetEmberColor, lightLerp);
+      emberFill.intensity += (studioSpec.emberIntensity * flicker - emberFill.intensity) * lightLerp;
+      renderer.toneMappingExposure += (studioSpec.exposure - renderer.toneMappingExposure) * lightLerp;
+
+      // Multi-axis cutaway plane
       const cutNormal = computeCutawayPlaneNormal(p.cutaway.axis);
       clipPlaneRef.current.normal.set(cutNormal.x, cutNormal.y, cutNormal.z);
       clipPlaneRef.current.constant = p.cutaway.enabled ? p.cutaway.offsetMeters : 6.0;
@@ -644,7 +753,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
         }
       }
 
-      // Trigger golden light pulse when a snap event arrives
+      // Snap-lock golden pulse wave
       if (p.snapPulse && p.snapPulse.nonce !== snapAnimRef.current.nonce) {
         snapAnimRef.current = {
           startSec: elapsed,
@@ -675,7 +784,6 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
         }
       }
 
-      // Animate GLB nodes in EXPLORE or ASSEMBLY mode
       const rig = rigRef.current;
       if (rig) {
         let selWorld: THREE.Vector3 | null = null;
@@ -709,6 +817,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
             const justSnapped = snapAnimRef.current.partId === part.id && pulseAge >= 0 && pulseAge < pulseDur;
             const mats = rig.partMaterials.get(part.id) ?? [];
             for (const m of mats) {
+              m.envMapIntensity = studioSpec.envMapIntensity;
               if (justSnapped) {
                 m.emissive.setHex(0xe8b968);
                 m.emissiveIntensity = (1 - pulseAge / pulseDur) * 0.58;
@@ -741,6 +850,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
 
             const mats = rig.partMaterials.get(part.id) ?? [];
             for (const m of mats) {
+              m.envMapIntensity = studioSpec.envMapIntensity;
               if (isSelected) {
                 m.emissive.setHex(0xd64527);
                 m.emissiveIntensity = 0.16 + pulse * 0.12;
@@ -755,7 +865,44 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
           }
         }
 
-        // Magnetic Copper-Gold Guide Ring & Connecting Alignment Beam
+        // Update 3D Spatial Callout Pins tracking their live bound GLB part positions
+        if (pinsRootRef.current) {
+          pinsRootRef.current.visible = p.showPinsIn3D;
+          if (p.showPinsIn3D) {
+            for (const anchor of p.calloutAnchors) {
+              const entry = pinVisualsRef.current.get(anchor.id);
+              if (!entry) continue;
+              const boundNode = rig.partGroups.get(anchor.partId);
+              const partPos: Vec3 = boundNode
+                ? { x: boundNode.position.x, y: boundNode.position.y, z: boundNode.position.z }
+                : { x: 0, y: 0, z: 0 };
+              const pinWorld = resolveAnchorWorldPosition(anchor, partPos);
+              const isSelectedPin = anchor.id === p.selectedAnchorId;
+              const bob = isSelectedPin ? Math.sin(elapsed * 3.4) * 0.018 : 0;
+
+              entry.orb.position.set(pinWorld.x, pinWorld.y + bob, pinWorld.z);
+              entry.ring.position.set(pinWorld.x, pinWorld.y + bob, pinWorld.z);
+              entry.ring.lookAt(camera.position);
+
+              const orbScale = isSelectedPin ? 1.32 + pulse * 0.14 : 1.0;
+              entry.orb.scale.set(orbScale, orbScale, orbScale);
+              const ringScale = isSelectedPin ? 1.25 + pulse * 0.25 : 0.92;
+              entry.ring.scale.set(ringScale, ringScale, ringScale);
+
+              const ringMat = entry.ring.material as THREE.MeshBasicMaterial;
+              ringMat.opacity = isSelectedPin ? 0.95 : 0.45;
+              const stemMat = entry.stem.material as THREE.LineBasicMaterial;
+              stemMat.opacity = isSelectedPin ? 0.95 : 0.52;
+
+              const stemAttr = entry.stem.geometry.getAttribute('position') as THREE.BufferAttribute;
+              stemAttr.setXYZ(0, partPos.x, partPos.y, partPos.z);
+              stemAttr.setXYZ(1, pinWorld.x, pinWorld.y + bob, pinWorld.z);
+              stemAttr.needsUpdate = true;
+            }
+          }
+        }
+
+        // Magnetic Copper-Gold Guide Ring
         if (guideGroupRef.current && guideBeamRef.current) {
           if (p.stageMode === 'ASSEMBLY' && activeStepNow) {
             const tp = activeStepNow.targetPosition;
@@ -792,7 +939,6 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
           }
         }
 
-        // 3D Caliper line (EXPLORE mode only)
         if (caliperLineRef.current) {
           if (
             p.stageMode === 'EXPLORE' &&
@@ -811,7 +957,6 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
           }
         }
 
-        // Real-time incense smoke curling upward from Song-Ming Xuande Censer
         if (smokePointsRef.current) {
           const isCenser = p.artifact.id === 'xuande_censer';
           smokePointsRef.current.visible = isCenser;
@@ -829,7 +974,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
             }
             attr.needsUpdate = true;
             const smMat = smokePointsRef.current.material as THREE.PointsMaterial;
-            smMat.opacity = p.ambientTheme === 'CANDLELIGHT' ? 0.34 : 0.45;
+            smMat.opacity = p.lightingPreset === 'WARM_LANTERN' || p.ambientTheme === 'CANDLELIGHT' ? 0.36 : 0.45;
           }
         }
       }
@@ -858,7 +1003,72 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     };
   }, []);
 
-  // Reset active drag & pulse state cleanly whenever exhibit or mode changes
+  // Sync 3D Spatial Callout Pin meshes whenever calloutAnchors change (exhibit switch or custom pin added/deleted)
+  useEffect(() => {
+    const root = pinsRootRef.current;
+    if (!root) return;
+
+    // Dispose old pin visuals cleanly
+    for (const entry of pinVisualsRef.current.values()) {
+      root.remove(entry.group);
+      entry.orb.geometry.dispose();
+      (entry.orb.material as THREE.Material).dispose();
+      entry.ring.geometry.dispose();
+      (entry.ring.material as THREE.Material).dispose();
+      entry.stem.geometry.dispose();
+      (entry.stem.material as THREE.Material).dispose();
+    }
+    pinVisualsRef.current.clear();
+
+    for (const anchor of calloutAnchors) {
+      const group = new THREE.Group();
+      const baseColor = anchor.tone === 'CINNABAR' ? 0xd64527 : 0xc98a3a;
+      const ringColor = anchor.tone === 'CINNABAR' ? 0xf2d194 : 0xd64527;
+
+      const orb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.056, 20, 20),
+        new THREE.MeshStandardMaterial({
+          color: baseColor,
+          emissive: baseColor,
+          emissiveIntensity: 0.32,
+          roughness: 0.28,
+          metalness: 0.45
+        })
+      );
+      orb.userData.anchorId = anchor.id;
+
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(0.092, 0.013, 12, 32),
+        new THREE.MeshBasicMaterial({
+          color: ringColor,
+          transparent: true,
+          opacity: 0.68
+        })
+      );
+      ring.userData.anchorId = anchor.id;
+
+      const stemGeo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, 0.2, 0)
+      ]);
+      const stem = new THREE.Line(
+        stemGeo,
+        new THREE.LineBasicMaterial({
+          color: baseColor,
+          transparent: true,
+          opacity: 0.7
+        })
+      );
+
+      group.add(stem);
+      group.add(orb);
+      group.add(ring);
+      root.add(group);
+      pinVisualsRef.current.set(anchor.id, { group, orb, ring, stem, partId: anchor.partId });
+    }
+  }, [calloutAnchors]);
+
+  // Reset drag & pulse on exhibit/mode change
   useEffect(() => {
     partDragRef.current.active = false;
     partDragRef.current.partId = null;
@@ -916,6 +1126,13 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
   const progressPct = Math.round(progress.progressRatio * 100);
   const activeYawVal = activeRuntime ? Math.round(activeRuntime.yawDeg) : 0;
 
+  const handleCycleNextAnchor = () => {
+    if (calloutAnchors.length === 0) return;
+    const idx = calloutAnchors.findIndex((a) => a.id === selectedAnchorId);
+    const next = calloutAnchors[(idx + 1) % calloutAnchors.length];
+    onSelectAnchor(next.id);
+  };
+
   return (
     <section
       className="spatial-panel stage-panel"
@@ -923,6 +1140,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
       data-testid="panel-stage-center"
       data-glb-ready={glbReady ? 'true' : 'false'}
       data-stage-mode={stageMode}
+      data-lighting-preset={lightingPreset}
     >
       <header className="panel-header">
         <div>
@@ -996,15 +1214,71 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
         })}
       </nav>
 
+      {/* Architectural Lighting Studio 3-Preset Bar + 3D Callout Pin Toggle */}
+      <div className="studio-toolbar" role="toolbar" aria-label="建筑光影影棚与空间锚点开关">
+        <div className="studio-lighting-group" role="group" aria-label="建筑光影预设">
+          {STUDIO_LIGHTING_ORDER.map((presetId) => {
+            const spec = STUDIO_LIGHTING_PRESETS[presetId];
+            const active = lightingPreset === presetId;
+            return (
+              <button
+                key={presetId}
+                type="button"
+                data-testid={`lighting-${presetId}`}
+                className={`studio-light-btn ${active ? 'active' : ''}`}
+                onClick={() => onSetLightingPreset(presetId)}
+                title={spec.descriptionZh}
+              >
+                {presetId === 'WARM_LANTERN' ? <Flame size={12} /> : <Sun size={12} />}
+                <span>{spec.labelZh}</span>
+                <small>{spec.kelvin}K</small>
+              </button>
+            );
+          })}
+        </div>
+
+        <button
+          type="button"
+          data-testid="toggle-pins-btn"
+          className={`pins-toggle-btn ${showPinsIn3D ? 'active' : ''}`}
+          onClick={onToggleShowPins}
+        >
+          {showPinsIn3D ? <Eye size={12} /> : <EyeOff size={12} />}
+          <span>3D 锚点钉 ({calloutAnchors.length})</span>
+        </button>
+      </div>
+
       {/* Live WebGL PBR + RoomEnvironment 3D Stage */}
-      <div className="stage-canvas-frame">
+      <div className={`stage-canvas-frame studio-${lightingPreset.toLowerCase()}`}>
         <div ref={mountRef} className="stage-webgl-mount" data-testid="three-canvas-mount" />
 
         {stageMode === 'EXPLORE' ? (
-          <div className="stage-gesture-hint">
-            <Sparkles size={13} />
-            <span>拖拽旋转、滚轮缩放，点选三维构件实时联动批注</span>
-          </div>
+          showPinsIn3D && selectedAnchor ? (
+            <div className="callout-hud-pill" data-testid="stage-callout-card">
+              <span className={`callout-dot tone-${selectedAnchor.tone.toLowerCase()}`} />
+              <div className="callout-hud-copy">
+                <strong data-testid="stage-callout-title">
+                  {selectedAnchor.titleZh} · {selectedAnchor.craftCategoryZh}
+                </strong>
+                <span>{selectedAnchor.mechanicsSummaryZh}</span>
+              </div>
+              <button
+                type="button"
+                data-testid="next-anchor-btn"
+                className="callout-next-btn"
+                onClick={handleCycleNextAnchor}
+                title="推镜聚焦下一枚 3D 空间锚点钉"
+              >
+                <MapPin size={12} />
+                <span>下一锚点</span>
+              </button>
+            </div>
+          ) : (
+            <div className="stage-gesture-hint">
+              <Sparkles size={13} />
+              <span>拖拽旋转、滚轮缩放，点击 3D 锚点钉或构件实时推镜联动</span>
+            </div>
+          )
         ) : (
           <div className="assembly-hud-card" data-testid="assembly-hud-card">
             <div className="assembly-hud-top">
@@ -1267,7 +1541,6 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
           </div>
         )}
 
-        {/* Dedicated Real-Time Architectural Cutaway Slicer Strip */}
         {cutaway.enabled && (
           <div className="cutaway-slicer-bar" data-testid="cutaway-slicer-bar">
             <div className="cutaway-axis-group" role="group" aria-label="剖面切片轴向">

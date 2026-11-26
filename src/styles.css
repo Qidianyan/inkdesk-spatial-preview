@@ -13,6 +13,10 @@
   --elevated-bg: #fbfaf7;
   --stage-bg-center: #faf9f6;
   --stage-bg-edge: #e4e1da;
+  --studio-zenith-center: #fcfaf4;
+  --studio-zenith-edge: #dfd9cc;
+  --studio-lantern-center: #2e241b;
+  --studio-lantern-edge: #15110d;
   --text-primary: #232220;
   --text-secondary: #56534d;
   --text-on-accent: #faf9f6;
@@ -540,6 +544,76 @@ input[type='range'].ink-range:focus-visible {
   color: var(--accent-bronze);
 }
 
+/* Architectural Lighting Studio 3-Preset Toolbar & 3D Callout Pin Controls */
+.studio-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.studio-lighting-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.studio-light-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 4px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-subtle);
+  background: var(--card-bg);
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.studio-light-btn small {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.studio-light-btn.active {
+  background: var(--text-primary);
+  color: var(--text-inverted);
+  border-color: var(--accent-bronze);
+}
+
+.studio-light-btn.active small {
+  color: var(--accent-bronze);
+}
+
+.pins-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 4px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-gold);
+  background: var(--elevated-bg);
+  color: var(--accent-bronze-text);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pins-toggle-btn.active {
+  background: var(--accent-bamboo);
+  border-color: var(--accent-bamboo);
+  color: var(--text-on-accent);
+}
+
 /* Center 3D WebGL Gallery Stage */
 .stage-canvas-frame {
   position: relative;
@@ -550,6 +624,80 @@ input[type='range'].ink-range:focus-visible {
   border: 1px solid var(--border-subtle);
   box-shadow: inset 0 1px 0 var(--panel-specular);
   overflow: hidden;
+  transition: background-color 0.3s ease;
+}
+
+.stage-canvas-frame.studio-gallery_zenith {
+  background: radial-gradient(circle at 50% 24%, var(--studio-zenith-center) 0%, var(--studio-zenith-edge) 100%);
+}
+
+.stage-canvas-frame.studio-warm_lantern {
+  background: radial-gradient(circle at 38% 48%, var(--studio-lantern-center) 0%, var(--studio-lantern-edge) 100%);
+  border-color: var(--border-gold);
+}
+
+.callout-hud-pill {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  max-width: min(460px, calc(100% - 24px));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 16px;
+  background: var(--elevated-bg);
+  border: 1px solid var(--border-gold);
+}
+
+.callout-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--accent-persimmon);
+}
+
+.callout-dot.tone-bronze {
+  background: var(--accent-bronze);
+}
+
+.callout-hud-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.callout-hud-copy strong {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.callout-hud-copy span {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.callout-next-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--card-bg);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
 }
 
 .stage-webgl-mount {
@@ -901,6 +1049,7 @@ input[type='range'].ink-range:focus-visible {
   border: 1px solid transparent;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
   transition: transform 0.15s ease, background-color 0.2s ease;
 }
@@ -1347,6 +1496,133 @@ input[type='range'].ink-range:focus-visible {
   gap: 8px;
 }
 
+.callout-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 16px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-subtle);
+}
+
+.callout-composer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.callout-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.inline-mode-link {
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--accent-bronze-text);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.callout-composer-row {
+  display: flex;
+  gap: 8px;
+}
+
+.callout-composer input {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: 4px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-field);
+  background: var(--elevated-bg);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.callout-composer input:focus {
+  outline: 2px solid var(--accent-bronze-text);
+  outline-offset: 2px;
+}
+
+.callout-error-text {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-persimmon);
+}
+
+.callout-pin-card {
+  padding: 4px 12px;
+  border-radius: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.callout-pin-card.focused {
+  padding: 8px 12px;
+  background: var(--elevated-bg);
+  border-color: var(--accent-bronze);
+}
+
+.callout-jump-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.callout-jump-btn.active {
+  color: var(--accent-persimmon);
+}
+
+.callout-cat-tag {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-bronze-text);
+  white-space: nowrap;
+}
+
+.callout-expanded-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.callout-era-line {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-bronze-text);
+}
+
 .note-composer input {
   flex: 1;
   min-width: 0;
@@ -1586,6 +1862,7 @@ input[type='range'].ink-range:focus-visible {
 
   .panel-header,
   .stage-telemetry,
+  .studio-toolbar,
   .stage-controls-bar,
   .cutaway-slicer-bar {
     flex-wrap: wrap;

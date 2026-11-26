@@ -9,6 +9,11 @@ import {
   type SpatialAudioAnchor,
   type SpatialNote
 } from '../data/artifacts';
+import {
+  STUDIO_LIGHTING_PRESETS,
+  type SpatialCalloutAnchor,
+  type StudioLightingPresetId
+} from '../spatial/calloutAnchors';
 import { measureDistanceMm } from './explodedModel';
 
 export function formatFocusClock(remainingSeconds: number): string {
@@ -26,6 +31,8 @@ export interface StudyReportInput {
   crossSectionEnabled: boolean;
   layoutPreset: LayoutPreset;
   ambientTheme: AmbientLightingTheme;
+  lightingPreset?: StudioLightingPresetId;
+  calloutAnchors?: SpatialCalloutAnchor[];
   soundAnchors: SpatialAudioAnchor[];
   focusTimer: FocusTimerState;
   notes: SpatialNote[];
@@ -38,6 +45,7 @@ export function generateStudyReportMarkdown(input: StudyReportInput): string {
   const activeSounds = input.soundAnchors.filter((a) => a.enabled);
   const theme = AMBIENT_THEMES[input.ambientTheme];
   const layout = LAYOUT_PRESETS[input.layoutPreset];
+  const studio = STUDIO_LIGHTING_PRESETS[input.lightingPreset ?? 'KYOTO_MORNING'];
   const caliperMm = input.comparePartId
     ? measureDistanceMm(artifact, part.id, input.comparePartId, input.explodeProgress)
     : 0;
@@ -47,7 +55,7 @@ export function generateStudyReportMarkdown(input: StudyReportInput): string {
     '',
     `- **英文名称**：${artifact.titleEn}`,
     `- **年代与制式**：${artifact.eraZh}`,
-    `- **当前空间布局**：${layout.labelZh} | 环境光：${theme.labelZh}（${theme.kelvin}K）`,
+    `- **当前空间布局**：${layout.labelZh} | 界面色温：${theme.labelZh}（${theme.kelvin}K） | 展台影棚：${studio.labelZh}（${studio.kelvin}K）`,
     `- **拆解进度**：${Math.round(input.explodeProgress * 100)}% | 剖面模式：${input.crossSectionEnabled ? '开启' : '关闭'}`,
     `- **专注计时**：已累计完成 ${input.focusTimer.completedSessions} 个番茄钟（当前剩余 ${formatFocusClock(input.focusTimer.remainingSeconds)}）`,
     '',
@@ -66,10 +74,18 @@ export function generateStudyReportMarkdown(input: StudyReportInput): string {
 
   lines.push(
     `- **力学原理**：${part.mechanicsPrinciple}`,
-    `- **历史注记**：${part.historicalNote}`,
-    '',
-    '## 空间声景锚点配置'
+    `- **历史注记**：${part.historicalNote}`
   );
+
+  if (input.calloutAnchors && input.calloutAnchors.length > 0) {
+    lines.push('', `## 3D 空间批注锚点（共 ${input.calloutAnchors.length} 枚）`);
+    for (const pin of input.calloutAnchors) {
+      const tag = pin.isCustom ? '[自定义空间钉] ' : `[${pin.craftCategoryZh}] `;
+      lines.push(`- ${tag}**${pin.titleZh}**（${pin.eraOrPeriodZh}）：${pin.craftDetailZh}`);
+    }
+  }
+
+  lines.push('', '## 空间声景锚点配置');
 
   if (activeSounds.length === 0) {
     lines.push('- 当前所有空间声源处于静音状态');
