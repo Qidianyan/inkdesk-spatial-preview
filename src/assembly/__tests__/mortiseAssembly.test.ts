@@ -240,4 +240,27 @@ describe('MortiseAssemblyEngine (3D Interactive Mortise-and-Tenon Snap & Cutaway
     expect(res.snapped).toBe(true);
     expect(res.reason).toBe('SNAPPED');
   });
+
+  it('sanitizes extreme 1e200 drag vectors and double-NaN cutaway fallbacks cleanly', () => {
+    const state = createMortiseAssemblyState(findArtifact('dougong_bell'));
+    const first = state.steps[0];
+    const huge = moveAssemblyPart(state, first.partId, { x: 1e200, y: 1e200, z: 0 }, 0);
+    const p = huge.parts[first.partId].position;
+    expect(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)).toBe(true);
+    expect(Math.hypot(p.x, p.y, p.z)).toBeCloseTo(2.4, 3);
+
+    const doubleNanCut = sanitizeCutawayState(
+      { enabled: true, axis: 'Z', offsetMeters: Number.NaN },
+      { enabled: false, axis: 'Y', offsetMeters: Number.NaN }
+    );
+    expect(Number.isFinite(doubleNanCut.offsetMeters)).toBe(true);
+  });
+
+  it('keeps cutaway state chained monotonically across axis & offset updates without drift', () => {
+    let state = createMortiseAssemblyState(findArtifact('armillary_sphere'));
+    state = updateCutawayPlane(state, { enabled: true });
+    state = updateCutawayPlane(state, { axis: 'X' });
+    state = updateCutawayPlane(state, { offsetMeters: -0.35 });
+    expect(state.cutaway).toEqual({ enabled: true, axis: 'X', offsetMeters: -0.35 });
+  });
 });

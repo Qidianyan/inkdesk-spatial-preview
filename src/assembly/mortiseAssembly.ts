@@ -196,10 +196,13 @@ export function sanitizeCutawayState(
   };
   const nextAxis: CutawayAxis =
     patch?.axis === 'X' || patch?.axis === 'Y' || patch?.axis === 'Z' ? patch.axis : base.axis;
-  const rawOffset = patch?.offsetMeters !== undefined ? patch.offsetMeters : base.offsetMeters;
+  const safeFallbackOffset = isFiniteNumber(base.offsetMeters)
+    ? Math.min(CUTAWAY_MAX_OFFSET, Math.max(CUTAWAY_MIN_OFFSET, base.offsetMeters))
+    : DEFAULT_CUTAWAY_OFFSET;
+  const rawOffset = patch?.offsetMeters !== undefined ? patch.offsetMeters : safeFallbackOffset;
   const safeOffset = isFiniteNumber(rawOffset)
     ? Math.min(CUTAWAY_MAX_OFFSET, Math.max(CUTAWAY_MIN_OFFSET, rawOffset))
-    : base.offsetMeters;
+    : safeFallbackOffset;
   return {
     enabled: patch?.enabled !== undefined ? Boolean(patch.enabled) : base.enabled,
     axis: nextAxis,

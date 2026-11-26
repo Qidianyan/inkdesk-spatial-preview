@@ -546,6 +546,16 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
       }
     };
 
+    const onPointerCancel = (ev: PointerEvent) => {
+      partDragRef.current.active = false;
+      partDragRef.current.partId = null;
+      partDragRef.current.lastPos = null;
+      orbitRef.current.dragging = false;
+      if (renderer.domElement.hasPointerCapture(ev.pointerId)) {
+        renderer.domElement.releasePointerCapture(ev.pointerId);
+      }
+    };
+
     const onWheel = (ev: WheelEvent) => {
       ev.preventDefault();
       orbitRef.current.zoom = Math.max(2.4, Math.min(5.2, orbitRef.current.zoom + ev.deltaY * 0.002));
@@ -554,6 +564,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     renderer.domElement.addEventListener('pointermove', onPointerMove);
     renderer.domElement.addEventListener('pointerup', onPointerUp);
+    renderer.domElement.addEventListener('pointercancel', onPointerCancel);
     renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -687,7 +698,11 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
             const lerpRate = partDragRef.current.active && partDragRef.current.partId === part.id ? 0.65 : Math.min(1, dt * 12);
 
             node.position.lerp(new THREE.Vector3(targetPos.x, targetPos.y, targetPos.z), lerpRate);
-            node.rotation.y += (targetYawRad - node.rotation.y) * Math.min(1, dt * 12);
+            const yawDiff = Math.atan2(
+              Math.sin(targetYawRad - node.rotation.y),
+              Math.cos(targetYawRad - node.rotation.y)
+            );
+            node.rotation.y += yawDiff * Math.min(1, dt * 12);
             const targetScale = isActiveStep ? 1.045 : 1.0;
             node.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), Math.min(1, dt * 10));
 
@@ -830,6 +845,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
+      renderer.domElement.removeEventListener('pointercancel', onPointerCancel);
       renderer.domElement.removeEventListener('wheel', onWheel);
       if (rigRef.current) {
         scene.remove(rigRef.current.root);
@@ -841,6 +857,15 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
       renderer.dispose();
     };
   }, []);
+
+  // Reset active drag & pulse state cleanly whenever exhibit or mode changes
+  useEffect(() => {
+    partDragRef.current.active = false;
+    partDragRef.current.partId = null;
+    partDragRef.current.lastPos = null;
+    snapAnimRef.current.startSec = -10;
+    snapAnimRef.current.partId = '';
+  }, [artifact.id, stageMode]);
 
   // Load real binary .glb artifact model whenever exhibit changes
   useEffect(() => {
@@ -1165,6 +1190,9 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
                 onPointerUp={() => {
                   if (activeStep) onAttemptSnapPart(activeStep.partId);
                 }}
+                onKeyUp={() => {
+                  if (activeStep) onAttemptSnapPart(activeStep.partId);
+                }}
               />
             </div>
 
@@ -1198,6 +1226,9 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
                   onMoveAssemblyPart(activeStep.partId, activeRuntime.position, Number(e.target.value));
                 }}
                 onPointerUp={() => {
+                  if (activeStep) onAttemptSnapPart(activeStep.partId);
+                }}
+                onKeyUp={() => {
                   if (activeStep) onAttemptSnapPart(activeStep.partId);
                 }}
               />

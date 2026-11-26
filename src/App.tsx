@@ -47,14 +47,12 @@ export const App: React.FC = () => {
   const [comparePartId, setComparePartId] = useState<string | null>('ludou');
   const [stageMode, setStageMode] = useState<StageInteractionMode>('EXPLORE');
   const [explodeProgress, setExplodeProgress] = useState<number>(0.26);
-  const [cutaway, setCutaway] = useState<CutawayPlaneState>({
-    enabled: false,
-    axis: 'Y',
-    offsetMeters: 0.22
-  });
   const [assemblyState, setAssemblyState] = useState<MortiseAssemblyState>(() =>
     createMortiseAssemblyState(findArtifact('dougong_bell'))
   );
+  const assemblyStateRef = useRef<MortiseAssemblyState>(assemblyState);
+  assemblyStateRef.current = assemblyState;
+  const cutaway = assemblyState.cutaway;
   const [snapPulse, setSnapPulse] = useState<SnapPulseEvent | null>(null);
   const [sfxMuted, setSfxMuted] = useState<boolean>(false);
   const [autoOrbit, setAutoOrbit] = useState<boolean>(true);
@@ -151,13 +149,18 @@ export const App: React.FC = () => {
     ]
   );
 
+  const commitAssemblyState = (next: MortiseAssemblyState) => {
+    assemblyStateRef.current = next;
+    setAssemblyState(next);
+  };
+
   const handleSelectArtifact = (nextId: string) => {
     const next = findArtifact(nextId);
-    const nextCutaway = sanitizeCutawayState({ enabled: false }, cutaway);
+    const nextCutaway = sanitizeCutawayState({ enabled: false }, assemblyStateRef.current.cutaway);
     const nextAssembly = createMortiseAssemblyState(next, { cutaway: nextCutaway });
     setArtifactId(next.id);
-    setCutaway(nextCutaway);
-    setAssemblyState(nextAssembly);
+    commitAssemblyState(nextAssembly);
+    setSnapPulse(null);
     const firstActive = getAssemblyProgress(nextAssembly).activePartId ?? next.parts[0].id;
     setSelectedPartId(stageMode === 'ASSEMBLY' ? firstActive : next.parts[0].id);
     setComparePartId(next.parts[1]?.id ?? null);
@@ -168,7 +171,7 @@ export const App: React.FC = () => {
     setStageMode(nextMode);
     if (nextMode === 'ASSEMBLY') {
       setAutoOrbit(false);
-      const activeId = getAssemblyProgress(assemblyState).activePartId;
+      const activeId = getAssemblyProgress(assemblyStateRef.current).activePartId;
       if (activeId) {
         setSelectedPartId(activeId);
       }
@@ -184,17 +187,18 @@ export const App: React.FC = () => {
   };
 
   const handleUpdateCutaway = (patch: Partial<CutawayPlaneState>) => {
-    const next = sanitizeCutawayState(patch, cutaway);
-    setCutaway(next);
-    setAssemblyState((prev) => updateCutawayPlane(prev, next));
+    const next = updateCutawayPlane(assemblyStateRef.current, patch);
+    commitAssemblyState(next);
   };
 
   const handleMoveAssemblyPart = (partId: string, nextPos: Vec3, nextYawDeg?: number) => {
-    setAssemblyState((prev) => moveAssemblyPart(prev, partId, nextPos, nextYawDeg));
+    const next = moveAssemblyPart(assemblyStateRef.current, partId, nextPos, nextYawDeg);
+    commitAssemblyState(next);
   };
 
   const handleSetApproachRatio = (partId: string, ratio: number, yawDeg?: number) => {
-    setAssemblyState((prev) => setPartApproachRatio(prev, partId, ratio, yawDeg));
+    const next = setPartApproachRatio(assemblyStateRef.current, partId, ratio, yawDeg);
+    commitAssemblyState(next);
   };
 
   const emitSnapFeedback = (
@@ -227,31 +231,26 @@ export const App: React.FC = () => {
   };
 
   const handleAttemptSnapPart = (partId: string, candidatePos?: Vec3, candidateYawDeg?: number) => {
-    setAssemblyState((prev) => {
-      const result = attemptSnapPart(prev, partId, candidatePos, candidateYawDeg);
-      emitSnapFeedback(partId, result.snapped, result.reason, result.completedJustNow, result.state);
-      return result.state;
-    });
+    const result = attemptSnapPart(assemblyStateRef.current, partId, candidatePos, candidateYawDeg);
+    commitAssemblyState(result.state);
+    emitSnapFeedback(partId, result.snapped, result.reason, result.completedJustNow, result.state);
   };
 
   const handleAssistSnapActive = () => {
-    setAssemblyState((prev) => {
-      const activeId = getAssemblyProgress(prev).activePartId;
-      const result = assistSnapActiveStep(prev);
-      if (activeId) {
-        emitSnapFeedback(activeId, result.snapped, result.reason, result.completedJustNow, result.state);
-      }
-      return result.state;
-    });
+    const activeId = getAssemblyProgress(assemblyStateRef.current).activePartId;
+    const result = assistSnapActiveStep(assemblyStateRef.current);
+    commitAssemblyState(result.state);
+    if (activeId) {
+      emitSnapFeedback(activeId, result.snapped, result.reason, result.completedJustNow, result.state);
+    }
   };
 
   const handleResetAssembly = () => {
-    setAssemblyState((prev) => {
-      const next = resetMortiseAssembly(prev);
-      const firstId = getAssemblyProgress(next).activePartId;
-      if (firstId) setSelectedPartId(firstId);
-      return next;
-    });
+    const next = resetMortiseAssembly(assemblyStateRef.current);
+    commitAssemblyState(next);
+    setSnapPulse(null);
+    const firstId = getAssemblyProgress(next).activePartId;
+    if (firstId) setSelectedPartId(firstId);
   };
 
   const handleToggleAudioEngine = async () => {
