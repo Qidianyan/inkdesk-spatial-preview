@@ -16,8 +16,149 @@ export class WebSpatialSoundscapeEngine {
   private nodes = new Map<SoundAnchorId, AnchorAudioNodes>();
   private running = false;
 
+  private sfxMuted = false;
+
   public isRunning(): boolean {
     return this.running;
+  }
+
+  public isSfxMuted(): boolean {
+    return this.sfxMuted;
+  }
+
+  public setSfxMuted(muted: boolean): void {
+    this.sfxMuted = muted;
+  }
+
+  private ensureAudioContext(): AudioContext | null {
+    if (typeof window === 'undefined') return null;
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!this.ctx) {
+      this.ctx = new AudioCtx();
+      this.masterGain = this.ctx.createGain();
+      this.masterGain.gain.value = 0.55;
+      this.masterGain.connect(this.ctx.destination);
+    }
+    if (this.ctx.state === 'suspended') {
+      void this.ctx.resume().catch(() => undefined);
+    }
+    return this.ctx;
+  }
+
+  /**
+   * Pure Web Audio synthesis of a crisp Kyoto Hinoki wood mortise-and-tenon click-clack.
+   * 100% offline, autoplay-safe, and muteable via setSfxMuted().
+   */
+  public playHinokiSnapSound(stepRatio = 0.5): boolean {
+    if (this.sfxMuted) return false;
+    const ctx = this.ensureAudioContext();
+    if (!ctx || !this.masterGain) return false;
+    try {
+      const now = ctx.currentTime;
+      const pitchBoost = 1 + Math.min(1, Math.max(0, stepRatio)) * 0.22;
+
+      // 1) Crisp hinoki transient wood-impact noise burst (bandpass around 1.45 kHz)
+      const burstLen = Math.floor(ctx.sampleRate * 0.036);
+      const burstBuf = ctx.createBuffer(1, burstLen, ctx.sampleRate);
+      const data = burstBuf.getChannelData(0);
+      for (let i = 0; i < burstLen; i++) {
+        const decay = Math.exp((-i / burstLen) * 8.5);
+        data[i] = (Math.random() * 2 - 1) * decay;
+      }
+      const noiseSrc = ctx.createBufferSource();
+      noiseSrc.buffer = burstBuf;
+      const woodBand = ctx.createBiquadFilter();
+      woodBand.type = 'bandpass';
+      woodBand.frequency.setValueAtTime(1480 * pitchBoost, now);
+      woodBand.Q.setValueAtTime(4.2, now);
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.42, now);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.036);
+      noiseSrc.connect(woodBand);
+      woodBand.connect(noiseGain);
+      noiseGain.connect(this.masterGain);
+      noiseSrc.start(now);
+
+      // 2) Dual warm hinoki modal body resonances (clack + hollow mortise seat)
+      const modes = [
+        { freq: 430 * pitchBoost, peak: 0.34, dur: 0.095, delay: 0 },
+        { freq: 890 * pitchBoost, peak: 0.22, dur: 0.068, delay: 0.012 },
+        { freq: 195 * pitchBoost, peak: 0.28, dur: 0.125, delay: 0.022 }
+      ];
+      for (const m of modes) {
+        const osc = ctx.createOscillator();
+        const env = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(m.freq, now + m.delay);
+        osc.frequency.exponentialRampToValueAtTime(m.freq * 0.86, now + m.delay + m.dur);
+        env.gain.setValueAtTime(0.0001, now + m.delay);
+        env.gain.linearRampToValueAtTime(m.peak, now + m.delay + 0.005);
+        env.gain.exponentialRampToValueAtTime(0.0001, now + m.delay + m.dur);
+        osc.connect(env);
+        env.connect(this.masterGain);
+        osc.start(now + m.delay);
+        osc.stop(now + m.delay + m.dur + 0.01);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Warm bronze-wood harmonic chord when all mortise steps complete. */
+  public playAssemblyCompleteChime(): boolean {
+    if (this.sfxMuted) return false;
+    const ctx = this.ensureAudioContext();
+    if (!ctx || !this.masterGain) return false;
+    try {
+      const now = ctx.currentTime;
+      const freqs = [392.0, 523.25, 659.25];
+      freqs.forEach((hz, idx) => {
+        const start = now + idx * 0.085;
+        const osc = ctx.createOscillator();
+        const env = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(hz, start);
+        env.gain.setValueAtTime(0.0001, start);
+        env.gain.linearRampToValueAtTime(0.18, start + 0.02);
+        env.gain.exponentialRampToValueAtTime(0.0001, start + 1.15);
+        osc.connect(env);
+        env.connect(this.masterGain!);
+        osc.start(start);
+        osc.stop(start + 1.2);
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Soft low wooden thud on out-of-order snap rejection. */
+  public playSnapRejectThud(): boolean {
+    if (this.sfxMuted) return false;
+    const ctx = this.ensureAudioContext();
+    if (!ctx || !this.masterGain) return false;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(160, now);
+      osc.frequency.exponentialRampToValueAtTime(98, now + 0.09);
+      env.gain.setValueAtTime(0.0001, now);
+      env.gain.linearRampToValueAtTime(0.16, now + 0.008);
+      env.gain.exponentialRampToValueAtTime(0.0001, now + 0.095);
+      osc.connect(env);
+      env.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.1);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private createNoiseBuffer(ctx: AudioContext, seconds = 3): AudioBuffer {
@@ -34,19 +175,13 @@ export class WebSpatialSoundscapeEngine {
   }
 
   public async start(anchors: SpatialAudioAnchor[], headYawDeg: number): Promise<boolean> {
-    if (typeof window === 'undefined' || (!window.AudioContext && !(window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext)) {
-      return false;
-    }
-    if (!this.ctx) {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.ctx = new AudioCtx();
-      this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.value = 0.55;
-      this.masterGain.connect(this.ctx.destination);
+    const ctx = this.ensureAudioContext();
+    if (!ctx) return false;
+    if (this.nodes.size === 0) {
       this.buildAllChannels(anchors);
     }
-    if (this.ctx.state === 'suspended') {
-      await this.ctx.resume();
+    if (ctx.state === 'suspended') {
+      await ctx.resume();
     }
     this.running = true;
     this.sync(anchors, headYawDeg);

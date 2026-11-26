@@ -13,21 +13,50 @@ import {
   type SpatialNote,
   type Vec3
 } from './data/artifacts';
+import {
+  assistSnapActiveStep,
+  attemptSnapPart,
+  createMortiseAssemblyState,
+  getAssemblyProgress,
+  moveAssemblyPart,
+  resetMortiseAssembly,
+  sanitizeCutawayState,
+  setPartApproachRatio,
+  updateCutawayPlane,
+  type CutawayPlaneState,
+  type MortiseAssemblyState
+} from './assembly/mortiseAssembly';
 import { measureDistanceMm } from './engine/explodedModel';
 import { computeSpatialLayout } from './engine/spatialLayout';
 import { generateStudyReportMarkdown } from './engine/studyReport';
 import { WebSpatialSoundscapeEngine } from './engine/webSpatialAudio';
 import { AudioFocusDock } from './components/AudioFocusDock';
-import { SpatialStage3D } from './components/SpatialStage3D';
+import { SpatialStage3D, type StageInteractionMode } from './components/SpatialStage3D';
 import { NotesInspector } from './components/NotesInspector';
+
+export interface SnapPulseEvent {
+  nonce: number;
+  partId: string;
+  position: Vec3;
+  isComplete: boolean;
+}
 
 export const App: React.FC = () => {
   const [artifactId, setArtifactId] = useState<string>('dougong_bell');
   const [selectedPartId, setSelectedPartId] = useState<string>('ang_lever');
   const [comparePartId, setComparePartId] = useState<string | null>('ludou');
+  const [stageMode, setStageMode] = useState<StageInteractionMode>('EXPLORE');
   const [explodeProgress, setExplodeProgress] = useState<number>(0.26);
-  const [crossSectionEnabled, setCrossSectionEnabled] = useState<boolean>(false);
-  const [sectionCutY, setSectionCutY] = useState<number>(0.22);
+  const [cutaway, setCutaway] = useState<CutawayPlaneState>({
+    enabled: false,
+    axis: 'Y',
+    offsetMeters: 0.22
+  });
+  const [assemblyState, setAssemblyState] = useState<MortiseAssemblyState>(() =>
+    createMortiseAssemblyState(findArtifact('dougong_bell'))
+  );
+  const [snapPulse, setSnapPulse] = useState<SnapPulseEvent | null>(null);
+  const [sfxMuted, setSfxMuted] = useState<boolean>(false);
   const [autoOrbit, setAutoOrbit] = useState<boolean>(true);
   const [layoutPreset, setLayoutPreset] = useState<LayoutPreset>('SURROUND_ARC');
   const [ambientTheme, setAmbientTheme] = useState<AmbientLightingTheme>('DAWN');
@@ -52,6 +81,10 @@ export const App: React.FC = () => {
       audioRef.current?.dispose();
     };
   }, []);
+
+  useEffect(() => {
+    audioRef.current?.setSfxMuted(sfxMuted);
+  }, [sfxMuted]);
 
   useEffect(() => {
     if (audioEngineActive) {
@@ -97,7 +130,7 @@ export const App: React.FC = () => {
         selectedPartId: selectedPart.id,
         comparePartId,
         explodeProgress,
-        crossSectionEnabled,
+        crossSectionEnabled: cutaway.enabled,
         layoutPreset,
         ambientTheme,
         soundAnchors,
@@ -109,7 +142,7 @@ export const App: React.FC = () => {
       selectedPart.id,
       comparePartId,
       explodeProgress,
-      crossSectionEnabled,
+      cutaway.enabled,
       layoutPreset,
       ambientTheme,
       soundAnchors,
@@ -120,11 +153,26 @@ export const App: React.FC = () => {
 
   const handleSelectArtifact = (nextId: string) => {
     const next = findArtifact(nextId);
+    const nextCutaway = sanitizeCutawayState({ enabled: false }, cutaway);
+    const nextAssembly = createMortiseAssemblyState(next, { cutaway: nextCutaway });
     setArtifactId(next.id);
-    setSelectedPartId(next.parts[0].id);
+    setCutaway(nextCutaway);
+    setAssemblyState(nextAssembly);
+    const firstActive = getAssemblyProgress(nextAssembly).activePartId ?? next.parts[0].id;
+    setSelectedPartId(stageMode === 'ASSEMBLY' ? firstActive : next.parts[0].id);
     setComparePartId(next.parts[1]?.id ?? null);
     setExplodeProgress(0.22);
-    setCrossSectionEnabled(false);
+  };
+
+  const handleSetStageMode = (nextMode: StageInteractionMode) => {
+    setStageMode(nextMode);
+    if (nextMode === 'ASSEMBLY') {
+      setAutoOrbit(false);
+      const activeId = getAssemblyProgress(assemblyState).activePartId;
+      if (activeId) {
+        setSelectedPartId(activeId);
+      }
+    }
   };
 
   const handleSelectPart = (partId: string) => {
@@ -133,6 +181,77 @@ export const App: React.FC = () => {
       const other = artifact.parts.find((p) => p.id !== partId);
       setComparePartId(other?.id ?? null);
     }
+  };
+
+  const handleUpdateCutaway = (patch: Partial<CutawayPlaneState>) => {
+    const next = sanitizeCutawayState(patch, cutaway);
+    setCutaway(next);
+    setAssemblyState((prev) => updateCutawayPlane(prev, next));
+  };
+
+  const handleMoveAssemblyPart = (partId: string, nextPos: Vec3, nextYawDeg?: number) => {
+    setAssemblyState((prev) => moveAssemblyPart(prev, partId, nextPos, nextYawDeg));
+  };
+
+  const handleSetApproachRatio = (partId: string, ratio: number, yawDeg?: number) => {
+    setAssemblyState((prev) => setPartApproachRatio(prev, partId, ratio, yawDeg));
+  };
+
+  const emitSnapFeedback = (
+    partId: string,
+    snapped: boolean,
+    reason: string,
+    completedJustNow: boolean,
+    nextState: MortiseAssemblyState
+  ) => {
+    if (snapped) {
+      const prog = getAssemblyProgress(nextState);
+      audioRef.current?.playHinokiSnapSound(prog.progressRatio);
+      if (completedJustNow) {
+        audioRef.current?.playAssemblyCompleteChime();
+      }
+      const step = nextState.steps.find((s) => s.partId === partId);
+      if (step) {
+        setSnapPulse({
+          nonce: Date.now() + Math.random(),
+          partId,
+          position: step.targetPosition,
+          isComplete: completedJustNow
+        });
+      }
+      const nextActive = prog.activePartId ?? partId;
+      setSelectedPartId(nextActive);
+    } else if (reason === 'OUT_OF_ORDER') {
+      audioRef.current?.playSnapRejectThud();
+    }
+  };
+
+  const handleAttemptSnapPart = (partId: string, candidatePos?: Vec3, candidateYawDeg?: number) => {
+    setAssemblyState((prev) => {
+      const result = attemptSnapPart(prev, partId, candidatePos, candidateYawDeg);
+      emitSnapFeedback(partId, result.snapped, result.reason, result.completedJustNow, result.state);
+      return result.state;
+    });
+  };
+
+  const handleAssistSnapActive = () => {
+    setAssemblyState((prev) => {
+      const activeId = getAssemblyProgress(prev).activePartId;
+      const result = assistSnapActiveStep(prev);
+      if (activeId) {
+        emitSnapFeedback(activeId, result.snapped, result.reason, result.completedJustNow, result.state);
+      }
+      return result.state;
+    });
+  };
+
+  const handleResetAssembly = () => {
+    setAssemblyState((prev) => {
+      const next = resetMortiseAssembly(prev);
+      const firstId = getAssemblyProgress(next).activePartId;
+      if (firstId) setSelectedPartId(firstId);
+      return next;
+    });
   };
 
   const handleToggleAudioEngine = async () => {
@@ -176,7 +295,7 @@ export const App: React.FC = () => {
     setLayoutPreset('SURROUND_ARC');
     setHeadYawDegrees(0);
     setExplodeProgress(0.26);
-    setCrossSectionEnabled(false);
+    handleUpdateCutaway({ enabled: false, axis: 'Y', offsetMeters: 0.22 });
   };
 
   const leftVisible = panelPoses.AUDIO_FOCUS_LEFT.visible;
@@ -198,7 +317,7 @@ export const App: React.FC = () => {
           </svg>
           <div>
             <h1>砚境空间 · InkDesk Spatial</h1>
-            <p>PICO Spatial SDK 6.2.8 浅灰钛金磨砂玻璃 × 京都桧木三窗空间书房</p>
+            <p>PICO Spatial SDK 6.2.8 浅灰钛金石面 × 京都桧木三窗空间书房</p>
           </div>
         </div>
 
@@ -282,17 +401,26 @@ export const App: React.FC = () => {
             artifact={artifact}
             selectedPartId={selectedPart.id}
             comparePartId={comparePartId}
+            stageMode={stageMode}
             explodeProgress={explodeProgress}
-            crossSectionEnabled={crossSectionEnabled}
-            sectionCutY={sectionCutY}
+            cutaway={cutaway}
+            assemblyState={assemblyState}
+            snapPulse={snapPulse}
+            sfxMuted={sfxMuted}
             ambientTheme={ambientTheme}
             autoOrbit={autoOrbit}
             caliperDistanceMm={caliperDistanceMm}
             onSelectArtifact={handleSelectArtifact}
             onSelectPart={handleSelectPart}
+            onSetStageMode={handleSetStageMode}
             onChangeExplode={setExplodeProgress}
-            onToggleCrossSection={() => setCrossSectionEnabled((v) => !v)}
-            onChangeSectionY={setSectionCutY}
+            onUpdateCutaway={handleUpdateCutaway}
+            onMoveAssemblyPart={handleMoveAssemblyPart}
+            onSetApproachRatio={handleSetApproachRatio}
+            onAttemptSnapPart={handleAttemptSnapPart}
+            onAssistSnapActive={handleAssistSnapActive}
+            onResetAssembly={handleResetAssembly}
+            onToggleSfxMuted={() => setSfxMuted((m) => !m)}
             onToggleAutoOrbit={() => setAutoOrbit((v) => !v)}
           />
         </div>
@@ -310,10 +438,10 @@ export const App: React.FC = () => {
               onSelectPart={handleSelectPart}
               onChangeComparePart={setComparePartId}
               onAddNote={handleAddNote}
-              onTogglePin={(noteId) =>
-                setNotes((prev) => prev.map((n) => (n.id === noteId ? { ...n, pinned: !n.pinned } : n)))
+              onTogglePin={(id) =>
+                setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, pinned: !n.pinned } : n)))
               }
-              onDeleteNote={(noteId) => setNotes((prev) => prev.filter((n) => n.id !== noteId))}
+              onDeleteNote={(id) => setNotes((prev) => prev.filter((n) => n.id !== id))}
               onChangeLayoutPreset={setLayoutPreset}
               onResetWorkspace={handleResetWorkspace}
             />
@@ -321,20 +449,18 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      <footer className="spatial-dock-footer" aria-label="空间窗口状态栏">
-        {layoutPreset === 'FOCUS_SINGLE' && (
-          <button
-            type="button"
-            className="restore-wings-pill"
-            onClick={() => setLayoutPreset('SURROUND_ARC')}
-          >
-            展开左右翼空间窗（恢复三窗环绕）
+      {/* Bottom Spatial Dock Bar */}
+      <footer className="spatial-dock-footer">
+        {layoutPreset === 'FOCUS_SINGLE' ? (
+          <button type="button" className="restore-wings-pill" onClick={() => setLayoutPreset('SURROUND_ARC')}>
+            展开左右双翼空间窗（环绕模式）
           </button>
+        ) : (
+          <div className="pico-grab-indicator">
+            <span className="grab-bar" />
+            <span>MIT Open Source · Kotlin Jetpack Compose + PICO Spatial SDK 6.2.8</span>
+          </div>
         )}
-        <div className="pico-grab-indicator">
-          <span className="grab-bar" />
-          <span>MIT Open Source, Kotlin Jetpack Compose + PICO Spatial SDK 6.2.8</span>
-        </div>
       </footer>
     </div>
   );
