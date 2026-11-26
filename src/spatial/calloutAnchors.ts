@@ -414,6 +414,23 @@ function isFiniteNum(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
+const BUILTIN_ANCHOR_IDS = new Set(BUILTIN_CALLOUT_ANCHORS.map((a) => a.id));
+let customPinSequence = 0;
+
+export function sanitizeCameraFocus(
+  focus?: CameraFocusTarget | null,
+  fallback: CameraFocusTarget = { yawRad: 0.56, pitchRad: 0.25, zoom: 3.5 }
+): CameraFocusTarget {
+  if (!focus || !isFiniteNum(focus.yawRad) || !isFiniteNum(focus.pitchRad) || !isFiniteNum(focus.zoom)) {
+    return { ...fallback };
+  }
+  return {
+    yawRad: focus.yawRad,
+    pitchRad: Math.max(-1.0, Math.min(1.0, focus.pitchRad)),
+    zoom: Math.max(2.4, Math.min(5.2, focus.zoom))
+  };
+}
+
 export function sanitizeLocalOffset(offset?: Vec3 | null): Vec3 {
   if (!offset || !isFiniteNum(offset.x) || !isFiniteNum(offset.y) || !isFiniteNum(offset.z)) {
     return { x: 0.28, y: 0.16, z: 0.24 };
@@ -471,7 +488,8 @@ export function createSpatialAnchorState(
     anchorsByArtifact[pin.artifactId].push({ ...pin, localOffset: { ...pin.localOffset }, cameraFocus: { ...pin.cameraFocus } });
   }
   for (const custom of customAnchors) {
-    if (!custom || !custom.artifactId || !custom.partId || !custom.titleZh?.trim()) continue;
+    if (!custom || !custom.id?.trim() || !custom.artifactId || !custom.partId || !custom.titleZh?.trim()) continue;
+    if (BUILTIN_ANCHOR_IDS.has(custom.id)) continue;
     if (!anchorsByArtifact[custom.artifactId]) {
       anchorsByArtifact[custom.artifactId] = [];
     }
@@ -479,6 +497,7 @@ export function createSpatialAnchorState(
     anchorsByArtifact[custom.artifactId].push({
       ...custom,
       localOffset: sanitizeLocalOffset(custom.localOffset),
+      cameraFocus: sanitizeCameraFocus(custom.cameraFocus),
       isCustom: true
     });
   }
@@ -609,7 +628,18 @@ export function addCustomCalloutAnchor(
   const safeTitle = title.slice(0, MAX_TITLE_LENGTH);
   const safeDetail = detail.slice(0, MAX_DETAIL_LENGTH);
   const nowIso = input.nowIso ?? new Date().toISOString().slice(0, 19);
-  const id = `pin_custom_${input.artifactId}_${Date.now()}_${customIndex + 1}`;
+  const nowMs = Date.now();
+  let id = '';
+  do {
+    customPinSequence += 1;
+    id = `pin_custom_${input.artifactId}_${nowMs}_${customPinSequence}`;
+  } while (existing.some((a) => a.id === id) || BUILTIN_ANCHOR_IDS.has(id));
+
+  const defaultFocus: CameraFocusTarget = {
+    yawRad: (customIndex % 2 === 0 ? 1 : -1) * 0.62,
+    pitchRad: 0.26,
+    zoom: 3.45
+  };
 
   const anchor: SpatialCalloutAnchor = {
     id,
@@ -622,11 +652,7 @@ export function addCustomCalloutAnchor(
     mechanicsSummaryZh: safeDetail.slice(0, 64),
     craftDetailZh: safeDetail,
     tone: input.tone === 'BRONZE' ? 'BRONZE' : 'CINNABAR',
-    cameraFocus: input.cameraFocus ?? {
-      yawRad: (customIndex % 2 === 0 ? 1 : -1) * 0.62,
-      pitchRad: 0.26,
-      zoom: 3.45
-    },
+    cameraFocus: sanitizeCameraFocus(input.cameraFocus, defaultFocus),
     isCustom: true,
     createdAtIso: nowIso
   };
@@ -727,34 +753,31 @@ export function deserializeCustomAnchors(rawJson: string | null | undefined): Sp
     const parsed = JSON.parse(rawJson);
     if (!Array.isArray(parsed)) return [];
     const valid: SpatialCalloutAnchor[] = [];
+    const seenIds = new Set<string>();
     for (const item of parsed) {
       if (
         item &&
         typeof item === 'object' &&
         typeof item.id === 'string' &&
+        item.id.trim().length > 0 &&
+        !BUILTIN_ANCHOR_IDS.has(item.id.trim()) &&
+        !seenIds.has(item.id.trim()) &&
         typeof item.artifactId === 'string' &&
+        item.artifactId.trim().length > 0 &&
         typeof item.partId === 'string' &&
+        item.partId.trim().length > 0 &&
         typeof item.titleZh === 'string' &&
         item.titleZh.trim().length > 0 &&
         typeof item.craftDetailZh === 'string' &&
         item.craftDetailZh.trim().length > 0
       ) {
-        const rawFocus = item.cameraFocus;
-        const safeFocus: CameraFocusTarget =
-          rawFocus &&
-          isFiniteNum(rawFocus.yawRad) &&
-          isFiniteNum(rawFocus.pitchRad) &&
-          isFiniteNum(rawFocus.zoom)
-            ? {
-                yawRad: rawFocus.yawRad,
-                pitchRad: Math.max(-1.0, Math.min(1.0, rawFocus.pitchRad)),
-                zoom: Math.max(2.4, Math.min(5.2, rawFocus.zoom))
-              }
-            : { yawRad: 0.56, pitchRad: 0.25, zoom: 3.5 };
+        const cleanId = item.id.trim();
+        seenIds.add(cleanId);
+        const safeFocus = sanitizeCameraFocus(item.cameraFocus);
         valid.push({
-          id: item.id,
-          artifactId: item.artifactId,
-          partId: item.partId,
+          id: cleanId,
+          artifactId: item.artifactId.trim(),
+          partId: item.partId.trim(),
           localOffset: sanitizeLocalOffset(item.localOffset),
           titleZh: item.titleZh.trim().slice(0, MAX_TITLE_LENGTH),
           craftCategoryZh:

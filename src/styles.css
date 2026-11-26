@@ -636,11 +636,24 @@ input[type='range'].ink-range:focus-visible {
   border-color: var(--border-gold);
 }
 
-.callout-hud-pill {
+.stage-top-overlay {
   position: absolute;
   top: 12px;
   left: 12px;
-  max-width: min(460px, calc(100% - 24px));
+  right: 12px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  pointer-events: none;
+}
+
+.callout-hud-pill {
+  position: relative;
+  flex: 0 1 440px;
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -648,6 +661,7 @@ input[type='range'].ink-range:focus-visible {
   border-radius: 16px;
   background: var(--elevated-bg);
   border: 1px solid var(--border-gold);
+  pointer-events: auto;
 }
 
 .callout-dot {
@@ -711,9 +725,7 @@ input[type='range'].ink-range:focus-visible {
 }
 
 .stage-gesture-hint {
-  position: absolute;
-  top: 12px;
-  left: 12px;
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -867,9 +879,8 @@ input[type='range'].ink-range:focus-visible {
 }
 
 .cutaway-badge {
-  position: absolute;
-  top: 12px;
-  right: 12px;
+  position: relative;
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 8px;

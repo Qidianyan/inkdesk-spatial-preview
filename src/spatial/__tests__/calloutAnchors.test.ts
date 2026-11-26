@@ -20,6 +20,7 @@ import {
   getSelectedAnchor,
   loadPersistedCustomAnchors,
   resolveAnchorWorldPosition,
+  sanitizeCameraFocus,
   savePersistedCustomAnchors,
   selectCalloutAnchor,
   setShowPinsIn3D,
@@ -227,5 +228,76 @@ describe('SpatialCalloutAnchors & Museum Lighting Studio (TS parity with Kotlin)
     expect(Number.isFinite(worldPin.y)).toBe(true);
     expect(snapped.state.cutaway.enabled).toBe(true);
     expect(pin.state.lightingPreset).toBe('GALLERY_ZENITH');
+  });
+
+  it('guarantees unique custom pin IDs even across delete-and-readd within the same millisecond', () => {
+    const originalNow = Date.now;
+    Date.now = () => 1764100000000;
+    try {
+      let state = createSpatialAnchorState('dougong_bell');
+      const first = addCustomCalloutAnchor(state, {
+        artifactId: 'dougong_bell',
+        partId: 'ludou',
+        titleZh: '批注甲',
+        craftDetailZh: '第一枚自定义锚点。'
+      });
+      const second = addCustomCalloutAnchor(first.state, {
+        artifactId: 'dougong_bell',
+        partId: 'huagong',
+        titleZh: '批注乙',
+        craftDetailZh: '第二枚自定义锚点。'
+      });
+      const removedFirst = deleteCustomCalloutAnchor(second.state, first.anchor!.id);
+      const third = addCustomCalloutAnchor(removedFirst.state, {
+        artifactId: 'dougong_bell',
+        partId: 'ang_lever',
+        titleZh: '批注丙',
+        craftDetailZh: '删除甲后同毫秒新增丙不应与乙重号。'
+      });
+      expect(third.ok).toBe(true);
+      expect(third.anchor!.id).not.toBe(second.anchor!.id);
+      const ids = getAnchorsForArtifact(third.state, 'dougong_bell').map((a) => a.id);
+      expect(new Set(ids).size).toBe(ids.length);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  it('sanitizes NaN/out-of-bounds cameraFocus and deduplicates or filters corrupt persisted pins', () => {
+    const state = createSpatialAnchorState('dougong_bell');
+    const added = addCustomCalloutAnchor(state, {
+      artifactId: 'dougong_bell',
+      partId: 'ludou',
+      titleZh: '相机焦距兜底测试',
+      craftDetailZh: 'NaN/越界推镜参数必须钳制防止 3D 视口黑屏。',
+      cameraFocus: { yawRad: Number.NaN, pitchRad: 99, zoom: -5 }
+    });
+    expect(added.ok).toBe(true);
+    expect(Number.isFinite(added.anchor!.cameraFocus.yawRad)).toBe(true);
+    expect(added.anchor!.cameraFocus.zoom).toBeGreaterThanOrEqual(2.4);
+    expect(added.anchor!.cameraFocus.zoom).toBeLessThanOrEqual(5.2);
+
+    const clamped = sanitizeCameraFocus({ yawRad: 0.5, pitchRad: 8, zoom: 0.1 });
+    expect(clamped.pitchRad).toBe(1.0);
+    expect(clamped.zoom).toBe(2.4);
+
+    const parsed = deserializeCustomAnchors(
+      JSON.stringify([
+        { id: 'pin_dougong_ludou', artifactId: 'dougong_bell', partId: 'ludou', titleZh: '冒充内置', craftDetailZh: '应拦截' },
+        { id: 'pin_dup', artifactId: 'dougong_bell', partId: 'ludou', titleZh: '保留首条', craftDetailZh: '合法数据' },
+        { id: 'pin_dup', artifactId: 'dougong_bell', partId: 'ludou', titleZh: '重复丢弃', craftDetailZh: '应去重' },
+        { id: '   ', artifactId: 'dougong_bell', partId: 'ludou', titleZh: '空编号', craftDetailZh: '应过滤' }
+      ])
+    );
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].id).toBe('pin_dup');
+  });
+
+  it('falls back safely when computeDirectionalLightVector receives non-positive or NaN radius', () => {
+    for (const badRadius of [0, -3, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const vec = computeDirectionalLightVector('WARM_LANTERN', badRadius);
+      expect(Math.hypot(vec.x, vec.y, vec.z)).toBeCloseTo(5.8, 3);
+      expect(vec.y).toBeGreaterThan(0);
+    }
   });
 });

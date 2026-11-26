@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   LAYOUT_PRESETS,
   type ArtifactPart,
@@ -73,6 +73,10 @@ export const NotesInspector: React.FC<NotesInspectorProps> = ({
   const [showNoteComposer, setShowNoteComposer] = useState(false);
   const [draft, setDraft] = useState('');
   const [showReportModal, setShowReportModal] = useState(false);
+
+  useEffect(() => {
+    setPinError(null);
+  }, [artifact.id]);
 
   const artifactNotes = notes.filter((n) => n.artifactId === artifact.id);
 

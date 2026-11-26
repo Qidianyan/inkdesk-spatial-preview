@@ -511,27 +511,35 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
 
       if (p.stageMode === 'ASSEMBLY' && rigRef.current) {
         raycaster.setFromCamera(pointer, camera);
-        const hits = raycaster.intersectObjects(rigRef.current.root.children, true);
-        const hitPart = hits.find((h) => typeof h.object.userData.partId === 'string');
-        if (hitPart) {
-          const hitId = hitPart.object.userData.partId as string;
-          const prog = getAssemblyProgress(p.assemblyState);
-          const runtime = p.assemblyState.parts[hitId];
-          if (prog.activePartId === hitId && runtime && !runtime.locked) {
-            const camNormal = new THREE.Vector3();
-            camera.getWorldDirection(camNormal);
-            const anchorWorld = new THREE.Vector3(runtime.position.x, runtime.position.y, runtime.position.z);
-            partDragRef.current.plane.setFromNormalAndCoplanarPoint(camNormal.negate(), anchorWorld);
-            if (raycaster.ray.intersectPlane(partDragRef.current.plane, hitPoint)) {
-              partDragRef.current.offset.copy(anchorWorld).sub(hitPoint);
-            } else {
-              partDragRef.current.offset.set(0, 0, 0);
+        const hittingPin =
+          p.showPinsIn3D &&
+          pinsRootRef.current &&
+          raycaster
+            .intersectObjects(pinsRootRef.current.children, true)
+            .some((h) => typeof h.object.userData.anchorId === 'string');
+        if (!hittingPin) {
+          const hits = raycaster.intersectObjects(rigRef.current.root.children, true);
+          const hitPart = hits.find((h) => typeof h.object.userData.partId === 'string');
+          if (hitPart) {
+            const hitId = hitPart.object.userData.partId as string;
+            const prog = getAssemblyProgress(p.assemblyState);
+            const runtime = p.assemblyState.parts[hitId];
+            if (prog.activePartId === hitId && runtime && !runtime.locked) {
+              const camNormal = new THREE.Vector3();
+              camera.getWorldDirection(camNormal);
+              const anchorWorld = new THREE.Vector3(runtime.position.x, runtime.position.y, runtime.position.z);
+              partDragRef.current.plane.setFromNormalAndCoplanarPoint(camNormal.negate(), anchorWorld);
+              if (raycaster.ray.intersectPlane(partDragRef.current.plane, hitPoint)) {
+                partDragRef.current.offset.copy(anchorWorld).sub(hitPoint);
+              } else {
+                partDragRef.current.offset.set(0, 0, 0);
+              }
+              partDragRef.current.active = true;
+              partDragRef.current.partId = hitId;
+              partDragRef.current.lastPos = runtime.position;
+              renderer.domElement.setPointerCapture(ev.pointerId);
+              return;
             }
-            partDragRef.current.active = true;
-            partDragRef.current.partId = hitId;
-            partDragRef.current.lastPos = runtime.position;
-            renderer.domElement.setPointerCapture(ev.pointerId);
-            return;
           }
         }
       }
@@ -997,6 +1005,28 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
         rigRef.current.dispose();
         rigRef.current = null;
       }
+      const disposeTree = (obj: THREE.Object3D | null) => {
+        if (!obj) return;
+        obj.traverse((child) => {
+          const renderable = child as { geometry?: THREE.BufferGeometry; material?: THREE.Material | THREE.Material[] };
+          renderable.geometry?.dispose();
+          if (Array.isArray(renderable.material)) {
+            renderable.material.forEach((m) => m.dispose());
+          } else {
+            renderable.material?.dispose();
+          }
+        });
+      };
+      disposeTree(pinsRoot);
+      pinVisualsRef.current.clear();
+      pinsRootRef.current = null;
+      disposeTree(pedestalGroup);
+      disposeTree(sectionGroup);
+      disposeTree(guideGroup);
+      disposeTree(guideBeam);
+      disposeTree(snapWave);
+      disposeTree(caliperLine);
+      disposeTree(smokePoints);
       sharedTextures.dispose();
       envRT.dispose();
       renderer.dispose();
@@ -1008,22 +1038,31 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
     const root = pinsRootRef.current;
     if (!root) return;
 
-    // Dispose old pin visuals cleanly
-    for (const entry of pinVisualsRef.current.values()) {
-      root.remove(entry.group);
-      entry.orb.geometry.dispose();
-      (entry.orb.material as THREE.Material).dispose();
-      entry.ring.geometry.dispose();
-      (entry.ring.material as THREE.Material).dispose();
-      entry.stem.geometry.dispose();
-      (entry.stem.material as THREE.Material).dispose();
-    }
-    pinVisualsRef.current.clear();
+    const disposePins = () => {
+      for (const entry of pinVisualsRef.current.values()) {
+        root.remove(entry.group);
+        entry.orb.geometry.dispose();
+        (entry.orb.material as THREE.Material).dispose();
+        entry.ring.geometry.dispose();
+        (entry.ring.material as THREE.Material).dispose();
+        entry.stem.geometry.dispose();
+        (entry.stem.material as THREE.Material).dispose();
+      }
+      pinVisualsRef.current.clear();
+    };
+    disposePins();
 
+    const rig = rigRef.current;
     for (const anchor of calloutAnchors) {
       const group = new THREE.Group();
       const baseColor = anchor.tone === 'CINNABAR' ? 0xd64527 : 0xc98a3a;
       const ringColor = anchor.tone === 'CINNABAR' ? 0xf2d194 : 0xd64527;
+
+      const boundNode = rig?.partGroups.get(anchor.partId);
+      const partPos: Vec3 = boundNode
+        ? { x: boundNode.position.x, y: boundNode.position.y, z: boundNode.position.z }
+        : { x: 0, y: 0, z: 0 };
+      const pinWorld = resolveAnchorWorldPosition(anchor, partPos);
 
       const orb = new THREE.Mesh(
         new THREE.SphereGeometry(0.056, 20, 20),
@@ -1035,6 +1074,7 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
           metalness: 0.45
         })
       );
+      orb.position.set(pinWorld.x, pinWorld.y, pinWorld.z);
       orb.userData.anchorId = anchor.id;
 
       const ring = new THREE.Mesh(
@@ -1045,11 +1085,12 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
           opacity: 0.68
         })
       );
+      ring.position.set(pinWorld.x, pinWorld.y, pinWorld.z);
       ring.userData.anchorId = anchor.id;
 
       const stemGeo = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(0, 0.2, 0)
+        new THREE.Vector3(partPos.x, partPos.y, partPos.z),
+        new THREE.Vector3(pinWorld.x, pinWorld.y, pinWorld.z)
       ]);
       const stem = new THREE.Line(
         stemGeo,
@@ -1066,6 +1107,10 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
       root.add(group);
       pinVisualsRef.current.set(anchor.id, { group, orb, ring, stem, partId: anchor.partId });
     }
+
+    return () => {
+      disposePins();
+    };
   }, [calloutAnchors]);
 
   // Reset drag & pulse on exhibit/mode change
@@ -1253,32 +1298,43 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
         <div ref={mountRef} className="stage-webgl-mount" data-testid="three-canvas-mount" />
 
         {stageMode === 'EXPLORE' ? (
-          showPinsIn3D && selectedAnchor ? (
-            <div className="callout-hud-pill" data-testid="stage-callout-card">
-              <span className={`callout-dot tone-${selectedAnchor.tone.toLowerCase()}`} />
-              <div className="callout-hud-copy">
-                <strong data-testid="stage-callout-title">
-                  {selectedAnchor.titleZh} · {selectedAnchor.craftCategoryZh}
-                </strong>
-                <span>{selectedAnchor.mechanicsSummaryZh}</span>
+          <div className="stage-top-overlay">
+            {showPinsIn3D && selectedAnchor ? (
+              <div className="callout-hud-pill" data-testid="stage-callout-card">
+                <span className={`callout-dot tone-${selectedAnchor.tone.toLowerCase()}`} />
+                <div className="callout-hud-copy">
+                  <strong data-testid="stage-callout-title">
+                    {selectedAnchor.titleZh} · {selectedAnchor.craftCategoryZh}
+                  </strong>
+                  <span>{selectedAnchor.mechanicsSummaryZh}</span>
+                </div>
+                <button
+                  type="button"
+                  data-testid="next-anchor-btn"
+                  className="callout-next-btn"
+                  onClick={handleCycleNextAnchor}
+                  title="推镜聚焦下一枚 3D 空间锚点钉"
+                >
+                  <MapPin size={12} />
+                  <span>下一锚点</span>
+                </button>
               </div>
-              <button
-                type="button"
-                data-testid="next-anchor-btn"
-                className="callout-next-btn"
-                onClick={handleCycleNextAnchor}
-                title="推镜聚焦下一枚 3D 空间锚点钉"
-              >
-                <MapPin size={12} />
-                <span>下一锚点</span>
-              </button>
-            </div>
-          ) : (
-            <div className="stage-gesture-hint">
-              <Sparkles size={13} />
-              <span>拖拽旋转、滚轮缩放，点击 3D 锚点钉或构件实时推镜联动</span>
-            </div>
-          )
+            ) : (
+              <div className="stage-gesture-hint">
+                <Sparkles size={13} />
+                <span>拖拽旋转、滚轮缩放，点击 3D 锚点钉或构件实时推镜联动</span>
+              </div>
+            )}
+
+            {cutaway.enabled && (
+              <div className="cutaway-badge" data-testid="cutaway-elevation-badge">
+                <Scissors size={12} />
+                <span>
+                  实时剖面 {cutaway.axis} 轴 · {Math.round(cutaway.offsetMeters * 1000)} mm
+                </span>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="assembly-hud-card" data-testid="assembly-hud-card">
             <div className="assembly-hud-top">
@@ -1339,15 +1395,6 @@ export const SpatialStage3D: React.FC<SpatialStage3DProps> = ({
             <p className="assembly-guide-text" data-testid="assembly-event-msg">
               {assemblyState.lastEventMessageZh}
             </p>
-          </div>
-        )}
-
-        {stageMode === 'EXPLORE' && cutaway.enabled && (
-          <div className="cutaway-badge" data-testid="cutaway-elevation-badge">
-            <Scissors size={12} />
-            <span>
-              实时剖面 {cutaway.axis} 轴 · {Math.round(cutaway.offsetMeters * 1000)} mm
-            </span>
           </div>
         )}
 

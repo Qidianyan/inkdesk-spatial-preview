@@ -77,7 +77,11 @@ export const App: React.FC = () => {
   const cutaway = assemblyState.cutaway;
 
   const [anchorState, setAnchorState] = useState<SpatialAnchorState>(() =>
-    createSpatialAnchorState('dougong_bell', loadPersistedCustomAnchors(), 'KYOTO_MORNING')
+    syncSelectedAnchorToPart(
+      createSpatialAnchorState('dougong_bell', loadPersistedCustomAnchors(), 'KYOTO_MORNING'),
+      'dougong_bell',
+      'ang_lever'
+    )
   );
   const anchorStateRef = useRef<SpatialAnchorState>(anchorState);
   anchorStateRef.current = anchorState;
@@ -204,15 +208,20 @@ export const App: React.FC = () => {
     const next = findArtifact(nextId);
     const nextCutaway = sanitizeCutawayState({ enabled: false }, assemblyStateRef.current.cutaway);
     const nextAssembly = createMortiseAssemblyState(next, { cutaway: nextCutaway });
-    const nextAnchors = switchAnchorArtifact(anchorStateRef.current, next.id);
+    const firstActive = getAssemblyProgress(nextAssembly).activePartId ?? next.parts[0].id;
+    const initialPartId = stageMode === 'ASSEMBLY' ? firstActive : next.parts[0].id;
+    const nextAnchors = syncSelectedAnchorToPart(
+      switchAnchorArtifact(anchorStateRef.current, next.id),
+      next.id,
+      initialPartId
+    );
     setArtifactId(next.id);
     commitAssemblyState(nextAssembly);
     commitAnchorState(nextAnchors);
     setSnapPulse(null);
     setCameraFocusGoal(null);
-    const firstActive = getAssemblyProgress(nextAssembly).activePartId ?? next.parts[0].id;
-    setSelectedPartId(stageMode === 'ASSEMBLY' ? firstActive : next.parts[0].id);
-    setComparePartId(next.parts[1]?.id ?? null);
+    setSelectedPartId(initialPartId);
+    setComparePartId(next.parts.find((p) => p.id !== initialPartId)?.id ?? null);
     setExplodeProgress(0.22);
   };
 
@@ -241,10 +250,19 @@ export const App: React.FC = () => {
   const handleSelectAnchor = (anchorId: string) => {
     const res = selectCalloutAnchor(anchorStateRef.current, anchorId);
     if (!res.found || !res.anchor || !res.partId) return;
+    const targetArtifact = findArtifact(res.anchor.artifactId);
+    if (targetArtifact.id !== artifact.id) {
+      const nextCutaway = sanitizeCutawayState({ enabled: false }, assemblyStateRef.current.cutaway);
+      const nextAssembly = createMortiseAssemblyState(targetArtifact, { cutaway: nextCutaway });
+      setArtifactId(targetArtifact.id);
+      commitAssemblyState(nextAssembly);
+      setSnapPulse(null);
+      setExplodeProgress(0.22);
+    }
     commitAnchorState(res.state);
     setSelectedPartId(res.partId);
-    if (comparePartId === res.partId) {
-      const other = artifact.parts.find((p) => p.id !== res.partId);
+    if (targetArtifact.id !== artifact.id || comparePartId === res.partId) {
+      const other = targetArtifact.parts.find((p) => p.id !== res.partId);
       setComparePartId(other?.id ?? null);
     }
     setAutoOrbit(false);
@@ -281,6 +299,16 @@ export const App: React.FC = () => {
     const res = deleteCustomCalloutAnchor(anchorStateRef.current, anchorId);
     if (res.ok) {
       commitAnchorState(res.state, true);
+      const fallback = getAnchorsForArtifact(res.state, artifact.id).find(
+        (a) => a.id === res.state.selectedAnchorId
+      );
+      if (fallback) {
+        setSelectedPartId(fallback.partId);
+        if (comparePartId === fallback.partId) {
+          const other = artifact.parts.find((p) => p.id !== fallback.partId);
+          setComparePartId(other?.id ?? null);
+        }
+      }
     }
   };
 
@@ -357,7 +385,10 @@ export const App: React.FC = () => {
     commitAssemblyState(next);
     setSnapPulse(null);
     const firstId = getAssemblyProgress(next).activePartId;
-    if (firstId) setSelectedPartId(firstId);
+    if (firstId) {
+      setSelectedPartId(firstId);
+      commitAnchorState(syncSelectedAnchorToPart(anchorStateRef.current, artifact.id, firstId));
+    }
   };
 
   const handleToggleAudioEngine = async () => {
